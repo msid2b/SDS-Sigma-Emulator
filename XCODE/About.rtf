@@ -1,0 +1,146 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2821
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fnil\fcharset0 Menlo-Regular;\f1\fswiss\fcharset0 Helvetica;\f2\fnil\fcharset0 Menlo-Bold;
+}
+{\colortbl;\red255\green255\blue255;\red93\green108\blue121;\red255\green255\blue255;\red74\green85\blue96;
+\red0\green0\blue0;\red14\green14\blue255;}
+{\*\expandedcolortbl;;\csgenericrgb\c36526\c42188\c47515;\csgenericrgb\c100000\c100000\c100000;\csgenericrgb\c29020\c33333\c37647;
+\csgenericrgb\c0\c0\c0\c85000;\csgenericrgb\c5500\c5500\c100000;}
+\margl1440\margr1440\vieww22120\viewh17580\viewkind0
+\deftab593
+\pard\tx593\pardeftab593\partightenfactor0
+
+\f0\fs24 \cf2 \cb3 \
+\pard\tx593\pardeftab593\partightenfactor0
+
+\fs28 \cf4 \'97\'97\'97\'97\'97\'97\'97 CREDITS \'97\'97\'97\'97\'97\'97\'97\'97
+\fs24 \cf2 \
+\
+This program was started as an effort to implement a graphical presentation of an XDS Sigma-7 running Control Program Five (CP-V).\
+\
+I had come across the Windows XP \'93siggy\'94 program by George Plue and Keith Calkins some years earlier and after retiring I decided it would be amusing to implement a Sigma emulator for my Mac.  The XP implementation conveniently came with a collection of source code for both the emulator and CP-V itself.\
+I used the XP emulator to build disk images for the C0F version for which there was a PO \'93tape\'94, and started work on the Mac-based emulator (in Swift, which I had not used before but decided was worth learning).\
+\
+After about a year of inconsistent attention to the project, I was able to boot CP-V from the disk images, logon, and run a few simple programs.  The implementation had a graphical representation of a running Sigma-7 panel, and a fairly extensive debugger for the virtual machine.  I made a video of this:\
+\
+\pard\tx593\pardeftab593\partightenfactor0
+{\field{\*\fldinst{HYPERLINK "https://drive.google.com/file/d/13axGAJYOo_VJbMYL8kOx-wxzT3pq8cL7/view?usp=share_link"}}{\fldrslt \cf2 https://drive.google.com/file/d/13axGAJYOo_VJbMYL8kOx-wxzT3pq8cL7/view?usp=share_link}}\
+\
+I sent the video to Keith Calkins, who passed it along to various interested parties.  They made me aware of the SIMH project and the associated Sigma/CP-V work that was being done by Ken Rector in particular.  Although I have not used SIMH or its code base, it has on a couple of occasions been helpful as a reference for debugging unexpected behaviour from my own emulation code.  Ken's Sigma-CPV-Kit was particularly useful in providing F00 PO tapes and utilities.\
+\
+Since then, with input from Keith, Ken, Bob Ollerton, Jim Allen and others I have steadily improved the Mac emulator.  \
+\
+This release includes the following features:\
+- Floating-point and decimal instructions,\
+- Large memory support,\
+- Improved terminal functions, including a command history and editor,\
+- Private disk packs,\
+- Support for both .mt and .tap format tapes,\
+- Automatic bursting of printer output to PDF files,\
+- Simple host machine interfaces, such as drag and drop of Mac files into the card reader, and easy copying of CP-V text files to the Mac via the Card Punch.\
+\pard\tx593\pardeftab593\partightenfactor0
+
+\f1 \cf0 \cb1 \
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardeftab593\pardirnatural\partightenfactor0
+\cf0 \
+\pard\tx593\pardeftab593\partightenfactor0
+
+\f0\fs28 \cf4 \cb3 \'97\'97\'97\'97\'97\'97\'97 LICENSES \'97\'97\'97\'97\'97\'97\'97\'97\
+\pard\tx593\pardeftab593\partightenfactor0
+
+\f2\b\fs24 \cf4 \
+
+\f0\b0 \cf5 \
+
+\f2\b\fs28 For UInt128.swift:
+\f0\b0\fs24 \
+\
+\pard\tx593\pardeftab593\partightenfactor0
+\cf2 //===----------------------------------------------------------------------===//\cf5 \
+\cf2 //\cf5 \
+\cf2 // This source file is part of the Swift.org open source project\cf5 \
+\cf2 //\cf5 \
+\cf2 // Copyright (c) 2024 Apple Inc. and the Swift project authors\cf5 \
+\cf2 // Licensed under Apache License v2.0 with Runtime Library Exception\cf5 \
+\cf2 //\cf5 \
+\cf2 // See \cf6 https://swift.org/LICENSE.txt\cf2  for license information\cf5 \
+\cf2 // See \cf6 https://swift.org/CONTRIBUTORS.txt\cf2  for the list of Swift project authors\cf5 \
+\cf2 //\cf5 \
+\cf2 //===----------------------------------------------------------------------===//\cf5 \
+\cf2 // Modified for public use in pre-Swift 6 installations as a precursor\cf5 \
+\cf2 // to using Swift 6. Modified by Michael Griebling\cf5 \
+\
+\cf2 // 
+\f2\b \cf4 Modified for compatibility with older versions of MacOS by MGS.
+\f0\b0 \cf5 \
+\cf2 // 
+\f2\b \cf4 Uses (U)Int instead of StaticBigInt for literals (StaticBigInt is not available on older MacOS versions).
+\f0\b0 \cf5 \
+\cf2 // 
+\f2\b \cf4 Added UInt128.allSet constant for all bits on (Using a literal -1 causes errors).
+\f0\b0 \cf5 \
+\
+\
+\pard\tx593\pardeftab593\partightenfactor0
+
+\f2\b\fs28 \cf5 For UInt4.swift
+\f0\b0\fs24 \
+\
+\pard\tx593\pardeftab593\partightenfactor0
+\cf2 //    MIT License\cf5 \
+\cf2 //\cf5 \
+\cf2 //    Copyright (c) 2018 Mark Renaud\cf5 \
+\cf2 //\cf5 \
+\cf2 //    Permission is hereby granted, free of charge, to any person obtaining a copy\cf5 \
+\cf2 //    of this software and associated documentation files (the "Software"), to deal\cf5 \
+\cf2 //    in the Software without restriction, including without limitation the rights\cf5 \
+\cf2 //    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\cf5 \
+\cf2 //    copies of the Software, and to permit persons to whom the Software is\cf5 \
+\cf2 //    furnished to do so, subject to the following conditions:\cf5 \
+\cf2 //\cf5 \
+\cf2 //    The above copyright notice and this permission notice shall be included in all\cf5 \
+\cf2 //    copies or substantial portions of the Software.\cf5 \
+\cf2 //\cf5 \
+\cf2 //    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\cf5 \
+\cf2 //    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\cf5 \
+\cf2 //    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\cf5 \
+\cf2 //    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\cf5 \
+\cf2 //    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\cf5 \
+\cf2 //    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\cf5 \
+\cf2 //    SOFTWARE.\cf5 \
+\cf2 //\cf5 \
+\cf2 // 
+\f2\b \cf4 Adapted to use UInt8 as the storage unit (MGS)\
+\
+\
+\pard\tx593\pardeftab593\partightenfactor0
+
+\fs28 \cf4 FOR EVERYTHING ELSE:
+\fs24 \
+\pard\tx593\pardeftab593\partightenfactor0
+
+\f0\b0 \cf5 \
+\pard\tx593\pardeftab593\partightenfactor0
+\cf2 MIT License\
+\pard\tx593\pardeftab593\partightenfactor0
+\cf5 \
+\pard\tx593\pardeftab593\partightenfactor0
+\cf2 Copyright (c) 2025, Michael G. Sidnell\cf5 \
+\
+\cf2 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the \'93Software\'94), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:\cf5 \
+\
+\cf2 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.\cf5 \
+\
+\cf2 THE SOFTWARE IS PROVIDED \'93AS IS\'94, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.\cf5 \
+\
+\pard\tx593\pardeftab593\partightenfactor0
+
+\f2\b\fs28 \cf4 END OF LICENSE
+\f0\b0\fs24 \cf5 \
+\
+\pard\tx593\pardeftab593\partightenfactor0
+
+\f2\b \cf4 \
+\
+
+\f0\b0 \cf5 \
+}
