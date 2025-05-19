@@ -1,5 +1,5 @@
-# XDS-Sigma-Emulator
-Xerox Sigma 7 Emulator for MacOS.
+# SDS-Sigma-Emulator
+SDS Sigma 7 Emulator for MacOS.
 
 ## Introduction
 This repository contains an XCode project that can be used to compile and run a Xerox Sigma 7 emulator.  
