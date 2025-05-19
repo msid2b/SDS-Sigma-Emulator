@@ -2,8 +2,9 @@
 Xerox Sigma 7 Emulator for MacOS.
 
 ## Introduction
-This repository contains an XCode project that can be used to compile and run a Xerox Sigma 7 emulator.  The emulator is capable of running CP-V.  On a Mac M1 system it is considerably faster than a real Sigma.
-The emulator can read either .mt or .tap format tapes.  
+This repository contains an XCode project that can be used to compile and run a Xerox Sigma 7 emulator.  
+The emulator is capable of booting and running CP-V.  
+On a Mac M1 system it is considerably faster than a real Sigma.
 
 ## Getting Started
 Download and compile the XCode project.  For speed, it is best to build a runnable app with the Project > Archive function.  Install this app in the applications directory and run it from there.   The file MacSiggy.pdf describes the initial set up and some of the program features.
@@ -12,7 +13,7 @@ Download and compile the XCode project.  For speed, it is best to build a runnab
 There is a F00 PO Tape in the Tapes directory of this respository.  
 
 ## Installer
-In the installer directory is a zip file containing the compiled application.  This can be installed directly on a Mac by copying the application package to the Applications directory.
+The Installer directory contains a zip file of the compiled application.  This can be installed directly on a Mac by copying the application package to the Applications directory.
 
 ## SIMH Compatibility
 The emulator can read and write both .tap and .mt format tape images: .tap files can be used for interchange with SIMH emulated Sigmas. 
