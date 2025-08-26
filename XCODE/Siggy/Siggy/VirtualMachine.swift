@@ -30,7 +30,7 @@ let kCardReadTime = 0.01                    // Time to read a card
 let kTapeRewindTime = 1.0                   // Pretty fast, really.
 let kTapeSpaceTime = 0.01                   // Pretty fast, really.
 let kTDVTime = 0.00                         // KLUDGE. Wait for things to quiesce.
-let kMinimumWaitTime = 0.00                 // KLUDGE. Wait for things to quiesce.
+//let kMinimumWaitTime = 0.000                // KLUDGE. Wait for things to quiesce ** DO NOT USE **
 let kCharacterTransmissionTime = 0.001      // Approx 10K Baud
 
 // MARK: Generalized disk address
@@ -77,10 +77,14 @@ class EventTrace {
         case mmcMap = 8
         case mmcMapBig = 9
         
+        // CPU Wait state events
+        case cpuWaiting = 11
+        case cpuExecuting = 12
+        
         // Async IO events
-        case interrupt = 10
-        case interruptCleared = 11
-        case interruptIgnored = 12
+        case interrupt = 13
+        case interruptCleared = 14
+        case interruptIgnored = 15
         
         case ioSIOStart = 16
         case ioSIODone = 17
@@ -105,6 +109,9 @@ class EventTrace {
         case .mmcAccess:        return "ACCESS"
         case .mmcMap:           return "MAPPGS"
         case .mmcMapBig:        return "MAPBIG"
+            
+        case .cpuWaiting:       return "CPUWAIT"
+        case .cpuExecuting:     return "CPUEXEC"
 
         case .interrupt:        return "INTRRUPT"
         case .interruptCleared: return "CLEARED"
@@ -114,7 +121,7 @@ class EventTrace {
         case .ioStateArmed:     return "ARMED"
         case .ioStateDisarmed:  return "DISARM"
         case .ioStateActive:    return "ACTIVE"
-        case .ioStateWaiting:   return "WAITING"
+        case .ioStateWaiting:   return "IOWAIT"
         default: break
         }
         return "OTHER"
@@ -1004,7 +1011,17 @@ class VirtualMachine: NSObject {
         }
         
         if let path = d.hostPath?.trimmingCharacters(in: [" "]), !path.isEmpty {
-            stmt.bind_string (4, path)
+            var p = path
+            if p.hasPrefix("/") {
+                let url = URL(fileURLWithPath: p)
+                let dx = url.deletingLastPathComponent().appendingPathComponent(".")
+                let dy = self.url.appendingPathComponent(".")
+                if (dx == dy) {
+                    // Save as relative pa
+                    p = "./"+url.lastPathComponent
+                }
+            }
+            stmt.bind_string (4, p)
         }
         
         stmt.bind_int (1, Int(d.deviceAddress))

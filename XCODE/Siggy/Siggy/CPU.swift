@@ -702,7 +702,6 @@ class InterruptSubsystem: Thread {
     
     var cpu: CPU!
     var access = SimpleMutex()
-    //var event = DispatchSemaphore(0)
     
     // (Group 0) Interrupt Levels
     let levelPowerOn        = 0         // Not implemented
@@ -955,8 +954,10 @@ class InterruptSubsystem: Thread {
                         clock3Post = ts
                         _ = post(levelCounter3Zero, priority: 0)
                     }
+                    else {
+                        cpu.clearWait(level: 0x04)
+                    }
                 }
-                cpu.clearWait()
             }
             else {
                 _ = post (levelCounter3Pulse, priority: 0)
@@ -1015,8 +1016,8 @@ class InterruptSubsystem: Thread {
         // Return new stste
         _state = state[level]
         access.release()
-        if (_state == .waiting) || cpu.isWaiting {
-            cpu.clearWait()
+        if (_state == .waiting) {
+            cpu.clearWait(level: UInt8(level))
         }
         return _state
     }
@@ -1069,7 +1070,6 @@ class InterruptSubsystem: Thread {
             state[cga.level] = .active
             interruptTrace?.addEvent(type: .interrupt, psd: cpu.psd.value, address: UInt32(cga.deviceAddr), level: UInt8(cga.level))
         }
-        
         access.release()
         return canGoActive
     }
@@ -1137,7 +1137,7 @@ class CPU: Thread {
         
         struct FloatMode {
             var rawValue: UInt4
-
+            
             var significance: Bool { get { return (rawValue & 0x4) != 0 } set { if newValue { rawValue |= 0x4} else {rawValue &= 0xB }}}
             var zero: Bool         { get { return (rawValue & 0x2) != 0 } set { if newValue { rawValue |= 0x2} else {rawValue &= 0xD }}}
             var normalize: Bool    { get { return (rawValue & 0x1) != 0 } set { if newValue { rawValue |= 0x1} else {rawValue &= 0xE }}}
@@ -1246,7 +1246,7 @@ class CPU: Thread {
             zWriteKey = UInt4(v & 0xF)
         }
         
-
+        
     }
     
     struct CPUStatus {
@@ -1338,9 +1338,10 @@ class CPU: Thread {
     // control of threaded access to CPU variables:
     var control = SimpleMutex()
     
-    private var fault: Bool = false
-    private var faultMessage: String = ""
-    private var neverMapped: Bool = true
+    private(set) var fault: Bool = false
+    private(set) var faultMessage: String = ""
+    private(set) var faultTime: MSTimestamp = 0
+    private(set) var neverMapped: Bool = true
     
     // Current instruction information
     private(set) var zInstruction = Instruction(0)
@@ -1387,8 +1388,11 @@ class CPU: Thread {
     var opTime: [Int64] = Array(repeating: 0, count: 128)
     private var opTotal: Int = 0
     
-    private var waitCount: Int = 0
-    private var waitTime: Int64 = 0
+    private(set) var waitCount: Int = 0
+    private(set) var waitTime: Int64 = 0
+    private(set) var waitTimeouts: UInt64 = 0
+    //private var lastWaitTime: Int64 = 0
+    //private var waitThrottle: Int64 = 0
     
     
     
@@ -1421,7 +1425,7 @@ class CPU: Thread {
         stopOnInstruction = instruction
         stopOnInstructionMask = mask
     }
-        
+    
     var stopOnTrap: UInt8 = 0                                   // 0 = Off, 0xFF = any (except CAL1), other = specific trap address
     func isTrapStop(_ a: UInt8) -> Bool {
         return (stopOnTrap == a)
@@ -1455,7 +1459,7 @@ class CPU: Thread {
     var mapTrace: EventTrace?
     var trapTrace: EventTrace?
     var ioTrace: EventTrace?
-    //var otherTrace: EventTrace?
+    var waitTrace: EventTrace?
     
     //MARK: REGISTER ACCESS
     func getRegisterRawWord(_ r: UInt4) -> UInt32 {
@@ -1638,12 +1642,14 @@ class CPU: Thread {
         mapTrace = EventTrace ("MAP", capacity: 0x100, machine)
         trapTrace = EventTrace("TRAPS", capacity: 0x40, machine)
         ioTrace = EventTrace("IO-OPERATIONS", capacity: 0x40, machine)
-        //otherTrace = EventTrace("OTHER", capacity: 0x100, machine)
+        waitTrace = EventTrace("WAIT", capacity: 0x100, machine)
         super.init()
         
         interrupts = InterruptSubsystem(cpu: self)
         virtualMemory = VirtualMemory (realMemory: realMemory, cpu: self)
         psd = PSD(0)
+        
+        //self.waitThrottle = Int64(machine.getIntegerSetting("WaitThrottle", 0))
     }
     
     
@@ -1693,6 +1699,7 @@ class CPU: Thread {
     func setFault (message: String) {
         fault = true
         faultMessage = message
+        faultTime = MSClock.shared.gmtTimestamp()
     }
     
     func resetCPU () {
@@ -1793,7 +1800,7 @@ class CPU: Thread {
                 if ((ea & 0x10000) != 0) {
                     ea = (ea & 0xFFFF) | (Int(psd.zExtension) << 16)
                 }
-                   
+                
                 // MARK: Fetch the (strange, mutlifaceted) indirect pointer.
                 ea = Int(realMemory.loadUnsignedWord(word: ea))
                 
@@ -1853,7 +1860,7 @@ class CPU: Thread {
         return ea
     }
     
-
+    
     //MARK:  STANDARD BREAKPOINT CHECKERS
     func clearBreakpoint (n: Int) {
         if (n > 0) && (n <= breakpointMax) {
@@ -1974,7 +1981,7 @@ class CPU: Thread {
     func clock4Pulse(_ clock4IMWA: Int) {
         if (isRunning) {
             var c: Int32 = 1
-
+            
             // Acquire will not complete until an instruction boundary, or until the cpu is waiting.
             control.acquire()
             
@@ -1997,13 +2004,16 @@ class CPU: Thread {
                 if (c == 0) && (!psd.zInhibitCI) {
                     //MARK: Under what circumstances does this happen. and is it important?
                     _ = interrupts.post(interrupts.levelCounter4Zero, priority: 0)
+                    clearWait(level: 0x0B)
                 }
-                clearWait()
+                else {
+                    clearWait(level: 0x05)
+                }
             }
             control.release()
         }
     }
-    
+
     //****************************************** MAIN  **********************************************
     
     // CPU flags: [USE Atomic TestandSet]  Bit 0: RUN, Bit 1: WAIT
@@ -2015,14 +2025,22 @@ class CPU: Thread {
     func setRun(stepMode m: StepMode,_ count: Int = 0) { if !OSAtomicTestAndSet(0,&cpuFlags) { stepMode = m; stepCount = count; runSemaphore.signal() }}
     var isRunning: Bool { get { return ((cpuFlags & 0x80) != 0) }}
     
+    private var inWait: Int32 = 0
     private var waitSemaphore = DispatchSemaphore(value:0)
-    func setWait() { _ = OSAtomicTestAndSet(1,&cpuFlags) }
-    func clearWait() {
-        if OSAtomicTestAndClear(1,&cpuFlags) {
+    func setWait() {
+        if OSAtomicCompareAndSwap32(0, 1, &inWait) {
+            waitTrace?.addEvent(type: .cpuWaiting, psd: self.psd.value)
+        }
+    }
+    func clearWait(level: UInt8) {
+        if OSAtomicCompareAndSwap32(1, 0, &inWait) {
+            waitTrace?.addEvent(type: .cpuExecuting, psd: self.psd.value, level: level)
             waitSemaphore.signal()
         }
     }
-    var isWaiting: Bool { get { return ((cpuFlags & 0x40) != 0) }}
+    var isWaiting: Bool { get { return (inWait != 0) }}
+    var waitSignalTime: MSTimestamp = 0
+    var waitInstructionTime: MSTimestamp = 0
     
     private(set) var decimal: Bool = true
     private(set) var decimalTrace: Bool = false
@@ -2065,21 +2083,23 @@ class CPU: Thread {
             }
             
             let waitStart = MSClock.shared.gmtTimestamp()
-            while isWaiting {                                  // isWaiting is set by the WAIT instruction
+            while isWaiting {
                 //MARK: While we are waiting, things can be awoken by an I/O interrupt, in which case the IO thread will signal the wait semaphore and the CPU will continue.
                 //MARK: Clock4 interrupts are not detected until the beginning of an instruction cycle, but they do cause the wait semaphore to be signaled
                 
-                let timeout = DispatchTime.now().advanced(by: .microseconds(2000))
                 machine.waitCycle()
                 
-                if (waitSemaphore.wait(timeout: timeout) != .timedOut) {
-                    let waitLength = MSClock.shared.gmtTimestamp() - waitStart
-                    waitTime += waitLength
-                    waitCount += 1
-                    clearWait()
+                let timeout = DispatchTime.now().advanced(by: .microseconds(2000))
+                if (waitSemaphore.wait(timeout: timeout) == .timedOut) {
+                    waitTimeouts += 1
                 }
+                let waitLength = MSClock.shared.gmtTimestamp() - waitStart
+                
+                waitTime += waitLength
+                waitCount += 1
+                //clearWait(level: 0x80)
             }
-            
+
             control.acquire()                               // *MUTEX* access to CPU properties
             
             // Reset breakpoint indicators
@@ -2109,7 +2129,7 @@ class CPU: Thread {
             }
             // FIXME: THIS ISN'T QUITE RIGHT...CLOCK PULSES CAN'T BE INHIBITED.
             else if (psd.zInhibit != 0x7) && (stepMode != .simple) {
-                checkForInterrupt()
+                checkForInterrupt(/* shouldBeInterrupt */)
             }
             
             //MARK: Begin instruction execution cycle.
@@ -2361,6 +2381,9 @@ class CPU: Thread {
                 setFault(message: "INVALID INTERRUPT LOCATION INSTRCTION: @"+String(format:"%X", id.location)+":"+zInstruction.getDisplayText())
             }
             interruptCount += 1
+        }
+        else {
+            //if expected && !fault { setFault (message: "Interrupt Expected")}
         }
     }
     
@@ -3859,12 +3882,9 @@ class CPU: Thread {
         //_ = effectiveAddress(reference: zInstruction.reference, indexRegister: zInstruction.index, indexAlignment: .word, indirect: zInstruction.indirect)
         //if (trapPending) { return }
         
-        if(kMinimumWaitTime > 0) {
-            Thread.sleep(forTimeInterval: kMinimumWaitTime)
-        }
-
         // Construct a semaphore to wait on.  This will happen at the top of the main CPU loop.
         setWait()
+        waitInstructionTime = MSClock.shared.gmtTimestamp()
     }
     
     //2F: LRP - LOAD REGISTER POINTER

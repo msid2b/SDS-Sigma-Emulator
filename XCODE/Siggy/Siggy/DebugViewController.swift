@@ -480,7 +480,7 @@ class DebugViewController: NSViewController, NSWindowDelegate, NSMenuItemValidat
             }
             else {
                 cpu.setRun(stepMode: .simple)
-                if (cpu.isWaiting) { cpu.clearWait() }
+                if (cpu.isWaiting) { cpu.clearWait(level: 0xff) }
                 updateDetailsNeeded = true
             }
         }
@@ -509,7 +509,7 @@ class DebugViewController: NSViewController, NSWindowDelegate, NSMenuItemValidat
                 cpu.clearBreakpoint(n: 5)
                 cpu.clearRun()
                 if (cpu.isWaiting) {
-                    cpu.clearWait()
+                    cpu.clearWait(level:0xff)
                 }
                 updateDetailsNeeded = true
                 displayStatus(cpu.getStatus())

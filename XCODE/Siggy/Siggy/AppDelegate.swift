@@ -221,7 +221,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func panic(message: String) {
         alert (.critical, message: message, detail: "Application will terminate")
-        exit(0)
+        if let cpu = Thread.current as? CPU {
+            cpu.setFault(message: message)
+        }
     }
     
     func debugPopup (message: String) {
