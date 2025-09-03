@@ -24,14 +24,14 @@ let kIOStartTime = 0.000                    // IO Set-up time
 let kIOCompletionTime = 0.000               // Wait time at end of IO
 let kCPUFault = 0.01                        // Loop wait after CPU fault
 let kCPURelease = 0.0                       // Time to wait after every n instructions.. This is only to cause threads to be rescheduled
-let kPrinterLineTime = 0.01                 // Time for lineprinter to print a line
-let kPunchLineTime = 0.01                   // Time to deliver the joke
-let kCardReadTime = 0.01                    // Time to read a card
+let kPrinterLineTime = 0.0005               // Time for lineprinter to print a line
+let kPunchLineTime = 0.0005                 // Time to deliver the joke
+let kCardReadTime = 0.0005                  // Time to read a card
 let kTapeRewindTime = 1.0                   // Pretty fast, really.
 let kTapeSpaceTime = 0.01                   // Pretty fast, really.
 let kTDVTime = 0.00                         // KLUDGE. Wait for things to quiesce.
 //let kMinimumWaitTime = 0.000                // KLUDGE. Wait for things to quiesce ** DO NOT USE **
-let kCharacterTransmissionTime = 0.001      // Approx 10K Baud
+let kCharacterTransmissionTime = 0.000      // As fast as possible
 
 // MARK: Generalized disk address
 struct DiskAddress {

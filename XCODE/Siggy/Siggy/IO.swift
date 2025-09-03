@@ -437,7 +437,9 @@ class COCOperation: Operation, @unchecked Sendable {
         Thread.setThreadPriority(kIOPriority)
         tty.outputCharacter(char)
         
-        Thread.sleep(forTimeInterval: kCharacterTransmissionTime)
+        if (kCharacterTransmissionTime > 0) {
+            Thread.sleep(forTimeInterval: kCharacterTransmissionTime)
+        }
         ioCompletionDelegate?.outputComplete(char, UInt8(tty.delegateID))
     }
 }
@@ -761,7 +763,7 @@ class Device: NSObject, IOCompletionDelegate {
         }
         
         
-        if (url.deletingLastPathComponent() == machine.url) {
+        if (url.deletingLastPathComponent().appendingPathComponent(".") == machine.url.appendingPathComponent(".")) {
             // Save as relative path
             p = "./"+url.lastPathComponent
         }
@@ -1649,7 +1651,7 @@ class PDFDevice: PrintDevice {
     
     //MARK: Called by CPU thread
     override func waitCycle() {
-        if ((MSDate().gmtTimestamp - lastPrintLineTime) > (30 * MSDate.ticksPerSecond64)) {
+        if ((MSDate().gmtTimestamp - lastPrintLineTime) > (15 * MSDate.ticksPerSecond64)) {
             lastPrintLineTime = MSTimestamp.max
             self.performSelector(onMainThread: #selector(finishJob), with: nil, waitUntilDone: false)
         }
@@ -1740,7 +1742,16 @@ class CRDevice: CardDevice {
                 do { b = try fh.read(upToCount: 1) } catch { log("*** READ THREW ***")}
                 if let b = b, b.count > 0 {
                     let c = b[0]
-                    if (c == 0x0A) {
+                    if (c == 0x09) {
+                        // EXPAND TABS
+                        card[p] = 0x40
+                        p += 1
+                        while ((p & 0x7) != 0) {
+                            card[p] = 0x40
+                            p += 1
+                        }
+                    }
+                    else if (c == 0x0A) {
                         gotLine = true
                     }
                     else {
@@ -3348,7 +3359,7 @@ class DPDevice: RandomAccessDevice {
         // bit 1: Flaw, nope
         // bit 2: Programming error
         // bit 3: Write protection
-        if (!isWritable)  { status |= 0x20 }
+        if (!isWritable)  { status |= 0x10 }
         return status
     }
 

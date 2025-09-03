@@ -2089,7 +2089,7 @@ class CPU: Thread {
                 
                 machine.waitCycle()
                 
-                let timeout = DispatchTime.now().advanced(by: .microseconds(2000))
+                let timeout = DispatchTime.now().advanced(by: .microseconds(1000))
                 if (waitSemaphore.wait(timeout: timeout) == .timedOut) {
                     waitTimeouts += 1
                 }
