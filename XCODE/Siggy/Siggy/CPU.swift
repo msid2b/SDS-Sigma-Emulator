@@ -2141,6 +2141,15 @@ class CPU: Thread {
             if (ia < 0x10) {
                 // MARK: THE PROCESS INTIALIZATION CODE AT ONE POINT EXECUTES A CAL1,9 [1] INSTRUCTION FROM REGISTER 15...
                 zInstruction.value = getRegisterUnsignedWord(UInt4(ia))
+
+                // MARK: 2026-04-21: ALLOW EXECUTION BREAKPOINTS ON REGISTERS.
+                checkExecutionBreakpoint(ia, false)
+                if (breakMode == .start) {
+                    breakMode = .none
+                }
+                else if (breakMode != .none) {
+                    stepMode = .simple
+                }
             }
             else {
                 if (psd.zMapped) {                    
@@ -2580,28 +2589,57 @@ class CPU: Thread {
     // Sets CC3 and 4 based on sign of value
     // All values except single bytes are considered to be signed.
     func setCC34<T: FixedWidthInteger>(_ value: T) {
-        psd.zCC = (psd.zCC & 0xC)
+        let zCC12 = (psd.zCC & 0xC)
         if !(value is UInt8), ((value.leadingZeroBitCount) == 0) {
-            psd.zCC4 = true
+            psd.zCC = zCC12 | 1
             return
         }
-        
         if (value != T(0)) {
-            psd.zCC3 = true
+            psd.zCC = zCC12 | 2
+            return
         }
+        psd.zCC = zCC12
     }
 
     func setCC34<T: FixedWidthInteger>(rawValue: T) {
-        psd.zCC &= 0xC
+        let zCC12 = (psd.zCC & 0xC)
         if !(rawValue is UInt8), ((rawValue & T(UInt8(0x80))) != 0) {
-            psd.zCC4 = true
+            psd.zCC = zCC12 | 1
             return
         }
-        
         if (rawValue != T(0)) {
-            psd.zCC3 = true
+            psd.zCC = zCC12 | 2
+            return
+        }
+        psd.zCC = zCC12
+    }
+    
+    // Clear CC1, CC2, and set CC3, CC4 based on word value
+    // Speeds up AI and CI when immediate operand is zero
+    func quickCC (_ w: UInt32) {
+        if (w == 0) {
+            psd.zCC = 0
+        }
+        else if ((w & 0x80000000) != 0) {
+            psd.zCC = 1
+        }
+        else {
+            psd.zCC = 2
         }
     }
+    
+    func quickCC (_ w: Int32) {
+        if (w == 0) {
+            psd.zCC = 0
+        }
+        else if (w < 0) {
+            psd.zCC = 1
+        }
+        else {
+            psd.zCC = 2
+        }
+    }
+    
 
     // MARK: Common code for PLW, PLM
     func pullValid (_ spd: SPD!,_ n: Int = 1) -> Bool {
@@ -3151,8 +3189,9 @@ class CPU: Thread {
         let r = zInstruction.register
         let rv = getRegisterUnsignedWord(r)
         let iv = zInstruction.extendedDisplacement
+        guard (iv != 0) else { quickCC(rv); return }
+        
         let (ur, carry, overflow) = rv.addReportingCarryAndOverflow(iv)
-
         setRegister(r, unsigned: ur)
         setCC34(ur)
         setCC2(overflow)
@@ -3166,6 +3205,7 @@ class CPU: Thread {
         let r = zInstruction.register
         let rv = getRegister(r)
         let iv = zInstruction.signedDisplacement
+        guard (iv != 0) else { quickCC(rv); return }
         
         psd.zCC &= 0xC
         psd.zCC3 = (rv > iv)
@@ -4959,11 +4999,7 @@ class CPU: Thread {
             let t = MSDate()
             let c = t.components()
             
-            // Find a year (1970-1997) that matches days of the week and leap.
-            var year = c.year - 28
-            while (year >= 1998) {
-                year -= 28
-            }
+            let year = machine.getVirtualYear(c.year)
             
             machine.log(level: .debug, "READ DIRECT MODE: \(mode), FUNCTION: \(function)")
             switch (function) {
@@ -4973,7 +5009,7 @@ class CPU: Thread {
             case 7:  setRegister(r, packed(c.day));      break;
             case 8:  setRegister(r, packed(c.month));    break;
             case 9:  setRegister(r, packed(year%100));   break;
-            case 32: setRegister(r, packed(19));         break;
+            case 32: setRegister(r, packed(year/100));   break;
             default: setRegister(r, 0); break
             }
             break
