@@ -1565,22 +1565,25 @@ class PDFDevice: PrintDevice {
                                     if (date.substr(2,1) == "/") && (date.substr(5,1) == "/")  && (time.substr(2, 1) == ":"),
                                        let mm = Int(date.substr(0,2)),
                                        let dd = Int(date.substr(3,2)),
-                                       var yy = Int(date.substr(6,2)),
+                                       let yy = Int(date.substr(6,2)),
                                        let hh = Int(time.substr(0,2)),
-                                       let nn = Int(time.substr(3,2)),
-                                       let _ = MSDate(components: MSDateComponents(year: yy+1900, month: mm, day: dd, hour: hh, minute: nn, second: 0, tick: 0)) {
-                                        //MARK: This is valid, fix the date.
-                                        bannerLine = true
-                                        
-                                        while (yy < 125) { yy += 28 }; yy -= 100
-                                        ascii[p-11] = UInt8(yy/10) + 0x30
-                                        ascii[p-10] = UInt8(yy%10) + 0x30
-                                        
-                                        jobID = hexOut(j, width: 4)
-                                        if (pdfOut != nil) {
-                                            pdfOut?.finalizeOutput()
+                                       let nn = Int(time.substr(3,2)) {
+                                        let ay = (yy < 70) ? yy+2000 : yy+1900
+                                        if let _ = MSDate(components: MSDateComponents(year: ay, month: mm, day: dd, hour: hh, minute: nn, second: 0, tick: 0)) {
+                                            //MARK: This is valid, fix the date.
+                                            bannerLine = true
+                                            
+                                            ascii[p-11] = UInt8(ay/1000 % 10) + 0x30
+                                            ascii[p-10] = UInt8(ay/100 % 10) + 0x30
+                                            ascii[p-9] = UInt8(ay/10 % 10) + 0x30
+                                            ascii[p-8] = UInt8(ay % 10) + 0x30
+                                            
+                                            jobID = hexOut(j, width: 4)
+                                            if (pdfOut != nil) {
+                                                pdfOut?.finalizeOutput()
+                                            }
+                                            pdfOut = nil
                                         }
-                                        pdfOut = nil
                                     }
                                 }
                             }
@@ -1651,7 +1654,7 @@ class PDFDevice: PrintDevice {
     
     //MARK: Called by CPU thread
     override func waitCycle() {
-        if ((MSDate().gmtTimestamp - lastPrintLineTime) > (15 * MSDate.ticksPerSecond64)) {
+        if ((MSDate().gmtTimestamp - lastPrintLineTime) > (11 * MSDate.ticksPerSecond64)) {
             lastPrintLineTime = MSTimestamp.max
             self.performSelector(onMainThread: #selector(finishJob), with: nil, waitUntilDone: false)
         }
@@ -1750,6 +1753,9 @@ class CRDevice: CardDevice {
                             card[p] = 0x40
                             p += 1
                         }
+                    }
+                    else if (c == 0x0D) {
+                    //MARK: Ignore CR if file came from DOS
                     }
                     else if (c == 0x0A) {
                         gotLine = true
@@ -1968,10 +1974,17 @@ class CPDevice: CardDevice {
             //MARK: PUNCH EBCDIC: --> WrITE ASCII TO FILE.
             var ascii = Data(repeating: 0x20, count: count+1)
             var p = 0
-            while (p < count) {
-                let a = asciiFromEbcdic(e[p])
-                ascii[p] = ((a >= 0x20) && (a <= 0x7E)) ? a : 0x2E
-                p += 1
+            var q = 0
+            while (q < count) {
+                let a = asciiFromEbcdic(e[q])
+                if (a == 0x08) && (p > 0) {
+                    p -= 1
+                }
+                else {
+                    ascii[p] = ((a >= 0x20) && (a <= 0x7E)) ? a : 0x2E
+                    p += 1
+                }
+                q += 1
             }
             
             // Trim card image, and add a newline
@@ -2127,7 +2140,7 @@ class COCDevice: CharacterDevice, TTYDelegate, COCCompletionDelegate {
         lineData[line]!.outputQueue = OperationQueue()
         lineData[line]!.outputQueue!.qualityOfService = .utility
         lineData[line]!.outputQueue!.maxConcurrentOperationCount = 1
-        
+
         lineData[line]!.receiveDSR = true
         lineData[line]!.receiverOn = true
         lineData[line]!.transmitCTS = true
@@ -2177,6 +2190,10 @@ class COCDevice: CharacterDevice, TTYDelegate, COCCompletionDelegate {
     }
     
     func autoSettingChanged(_ id: Int, _ enabled: Bool) {
+    }
+    
+    func machineYear(_ y: Int) -> Int {
+        return machine.getVirtualYear(y)
     }
     
     func windowShouldClose(_ line: Int) -> Bool {

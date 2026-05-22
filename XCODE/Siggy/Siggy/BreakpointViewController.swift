@@ -139,7 +139,7 @@ class BreakpointViewController: NSViewController {
         }
             
         if let address = hexIn(hex: textAddress.stringValue) ,
-           (address >= 0x10) && ((address <= 0x1FFFF) || ((checkUnmapped.state == .on) && (address <= 0x3FFFFF))) {
+           (address >= 0x00) && ((address <= 0x1FFFF) || ((checkUnmapped.state == .on) && (address <= 0x3FFFFF))) {
             
             breakpoint.address = UInt32(address)
             breakpoint.user = UInt8(user)

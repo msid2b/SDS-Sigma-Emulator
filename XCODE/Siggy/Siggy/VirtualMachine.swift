@@ -10,9 +10,10 @@ import Foundation
 import Quartz
 
 // Various Thread priorities:
+// The main thread runs at priority 0.5
 var kCPUPriority =  0.2
-var kIOPriority =   0.6
-var kInterruptPriority = 0.9
+var kIOPriority =   0.3
+var kInterruptPriority = 0.4
 
 // Max number of active IOs on a single IOP - NO LONGER USED.
 //let kIOPMaxActiveIOs = 16                   // MUST BE > #COCs, SHOULD BE 16
@@ -286,7 +287,9 @@ class RealMemory: Any {
         }
         
         pageReads = UnsafeMutableBufferPointer<UInt>.allocate(capacity: pages)
+        pageReads.initialize(repeating: 0)
         pageWrites = UnsafeMutableBufferPointer<UInt>.allocate(capacity: pages)
+        pageWrites.initialize(repeating: 0)
         executionCount = UnsafeMutableBufferPointer<UInt>.allocate(capacity: pages * 0x200)
         executionCount.initialize(repeating: 0)
         
@@ -676,6 +679,7 @@ class VirtualMachine: NSObject {
     var terminals: [TTYWindowController?] = []
     
     private var autoBoot: Bool = false
+    private var dateTranslation: Bool = false
     private var bootDevice: Int = 0
     private var bootedLast: Int = 0
     private var memoryPages: Int = 0
@@ -692,6 +696,7 @@ class VirtualMachine: NSObject {
     static let kBootDevice = "BootDevice"
     static let kBootedLast = "BootedLast"
     static let kDateCreated = "DateCreated"
+    static let kDateTranslation = "DateTranslation"
     static let kMemoryPages = "MemoryPages"
     static let kName = "Name"
     static let kMapClock4 = "MapClock4"
@@ -712,7 +717,18 @@ class VirtualMachine: NSObject {
     // CP-V related data
     var monitorReferences: MonitorReferences?
     var currentUser: Int { get { return (monitorReferences == nil) ? 0 : Int(realMemory.loadUnsignedWord(word: monitorReferences!.currentUserAddress))  }}
-    
+
+    func getVirtualYear(_ y: Int) -> Int {
+        guard dateTranslation else { return y }
+        
+        // Find a year (1970-1997) that matches days of the week and leap.
+        var year = y - 28
+        while (year >= 1998) {
+            year -= 28
+        }
+        return year
+    }
+
     // HARDWARE
     var realMemory: RealMemory!
     var cpu: CPU!
@@ -1229,8 +1245,12 @@ class VirtualMachine: NSObject {
         
         name = url.deletingPathExtension().lastPathComponent + ":" + getSetting(VirtualMachine.kName, "*")
         
+        
         if let aa = getSetting(VirtualMachine.kAutoBoot) {
             autoBoot = (aa == "Y")
+        }
+        if let dx = getSetting(VirtualMachine.kDateTranslation) {
+            dateTranslation = (dx == "Y")
         }
         bootDevice = hexIn(hex: getSetting(VirtualMachine.kBootDevice), defaultValue: 0)
         bootedLast = hexIn(hex: getSetting(VirtualMachine.kBootedLast), defaultValue: 0)
@@ -1358,6 +1378,7 @@ class VirtualMachine: NSObject {
         // Start it
         cpu.start()
         initForBoot(cpu)
+        MSLog ("Power On: Thread prio: \(Thread.threadPriority())")
     }
     
     func initForBoot(_ cpu: CPU!) {

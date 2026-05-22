@@ -407,6 +407,7 @@ class DebugViewController: NSViewController, NSWindowDelegate, NSMenuItemValidat
     }
     
     @IBAction func buttonFloatClick(_ sender: Any) {
+        genP10()
         floatTest(CPU.PSD.FloatMode(rawValue: 0x7))
         decimalTest()
     }

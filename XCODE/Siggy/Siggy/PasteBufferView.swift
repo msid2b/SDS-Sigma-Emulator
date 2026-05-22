@@ -148,7 +148,7 @@ class PasteBufferViewController: NSViewController, NSWindowDelegate {
     @IBAction func buttonPasteEnterClick(_ sender: Any) {
         let row = tableView.selectedRow
         if (row >= 0) && (row < pasteList.count) {
-            pasteDelegate?.pasteText(pasteList[row].text+"\n")
+            pasteDelegate?.pasteText(pasteList[row].text+"\r")
         }
     }
     

@@ -223,6 +223,7 @@ class TTYTextView: NSTextView {
 }
 
 protocol TTYDelegate {
+    func machineYear(_ y: Int) -> Int
     func autoSettingChanged(_ id: Int,_ enabled: Bool)
     func characterIn (_ id: Int, _ c: Character, isBreak: Bool)
     func windowShouldClose(_ id: Int) -> Bool
@@ -466,12 +467,9 @@ class TTYViewController: NSViewController, NSWindowDelegate, PasteBufferDelegate
     
     @IBAction func buttonDateClick(_ sender: Any) {
         let c = MSDate().components()
-        // Find a year (1970-1997) that matches days of the week and leap.
-        var year = c.year - 28
-        while (year >= 1998) {
-            year -= 28
+        if let year = delegate?.machineYear(c.year) {
+            pasteText(String(format:"%02d/%02d/%02d", c.month, c.day, year%100))
         }
-        pasteText(String(format:"%02d/%02d/%02d", c.month, c.day, year-1900))
     }
     
     @IBAction func buttonTimeClick(_ sender: Any) {
@@ -576,12 +574,12 @@ class TTYViewController: NSViewController, NSWindowDelegate, PasteBufferDelegate
             
             if let fh = logFileHandle {
                 if let d = s.data(using: String.Encoding.utf8) {
-                    do { try fh.write(contentsOf: d) } catch { MSLog(level: .error, "Unable to write to log for \(name):\(delegateID)") }
+                    do { try fh.write(contentsOf: d) } catch { MSLog(level: .error, "Unable to write to log for \(name ?? "Unknown"):\(delegateID)") }
                 }
             }
         }
         else {
-            MSLog(level: .error, "Unable to write to TTY \(name):\(delegateID)")
+            MSLog(level: .error, "Unable to write to TTY \(name ?? "Unknown"):\(delegateID)")
         }
     }
     
@@ -593,6 +591,10 @@ class TTYViewController: NSViewController, NSWindowDelegate, PasteBufferDelegate
             
         case 0x07:
             NSSound.beep()
+        
+        case 008:
+            //RunLoop.main.perform(delete)
+            break
             
         case 0x7F:
             RunLoop.main.perform(delete)
@@ -640,11 +642,11 @@ class ConsoleController: NSObject, TTYDelegate {
             let ch = machine.getIntegerSetting("ConsoleHeight",25)
             let cw = machine.getIntegerSetting("ConsoleWidth", 80)
             let styleNumber = machine.getIntegerSetting("ConsoleStyle", 0)
+            let cx = machine.getDoubleSetting("ConsoleX", 0)
+            let cy = machine.getDoubleSetting("ConsoleY", 0)
             if tty!.configure(name: title,
                               defaultStyle: TTYViewController.Style(interruptButtonTitle: "Interrupt!", backgroundColor: .white, foregroundColor: .black, forceUppercase: true, autoButton: true),
                               styleSelection: styleNumber, height: max(ch,10), width: max(cw,60)) {
-                let cx = machine.getDoubleSetting("ConsoleX", 0)
-                let cy = machine.getDoubleSetting("ConsoleY", 0)
                 tty!.setOrigin (CGPoint(x: cx, y: cy))
                 return
             }
@@ -654,6 +656,10 @@ class ConsoleController: NSObject, TTYDelegate {
     
     func autoSettingChanged(_ id: Int,_ enabled: Bool) {
         autoAnswerEnabled = enabled
+    }
+    
+    func machineYear(_ y: Int) -> Int {
+        return machine.getVirtualYear(y)
     }
 
     func windowShouldClose(_ id: Int) -> Bool {
@@ -769,12 +775,8 @@ class ConsoleController: NSObject, TTYDelegate {
         if autoAnswerEnabled {
             if (s == "\nDATE(MM/DD/YY)=") && (machine.getSetting(VirtualMachine.kAutoDate,"N") == "Y") {
                 let c = MSDate().components()
-                // Find a year (1970-1997) that matches days of the week and leap.
-                var year = c.year - 28
-                while (year > 1997) {
-                    year -= 28
-                }
-                return String(format:"%02d/%02d/%02d", c.month, c.day, year-1900)
+                let year = machine.getVirtualYear(c.year)
+                return String(format:"%02d/%02d/%02d", c.month, c.day, year%100)
             }
             else if (s == "\nTIME(HH:MM)=") && (machine.getSetting(VirtualMachine.kAutoDate,"N") == "Y") {
                 let c = MSDate().roundedToMinute.components()
