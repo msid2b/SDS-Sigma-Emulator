@@ -23,16 +23,6 @@ class IODeviceReference: NSObject {
     
     var path: String? { get { return device.hostPath }}
     var isWritable: Bool { get { return ((device is BlockDevice) ? (device as? BlockDevice)!.isWritable : false) }}
-    var status: String { get { return deviceStatus() }}
-    private func deviceStatus() -> String {
-        let (m, p, _, details) = device.mediaStatus()
-        if (m) {
-            var ds = "POSITION: ."+hexOut(p,width:6)
-            if (details != "") { ds.addToCommaSeparatedList(details) }
-            return ds
-        }
-        return "NO MEDIA MOUNTED"
-    }
     
     var burstOutput: Bool = false
     var showVFC: Bool = false
@@ -47,7 +37,7 @@ class IODeviceReference: NSObject {
                     if !siggyApp.alertYesNo(message: "Device in Use!", detail: "Click UNLOAD to force dismount", yesText: "UNLOAD") {
                         return false
                     }
-                    t.forceUnload()
+                    t.unload(true)
                     return true
                 }
                 siggyApp.alert(.warning, message: "Device in Use!", detail: "")
@@ -74,7 +64,12 @@ class MediaCellView: NSTableCellView {
     @IBOutlet weak var erase: NSButton!
     @IBOutlet weak var icon: NSImageView!
     @IBOutlet weak var status: NSTextField!
-    
+    @IBOutlet weak var buttonMediaInfo: NSButton!
+    @IBOutlet weak var bottom: NSBox!
+    @IBOutlet weak var top: NSBox!
+    @IBOutlet weak var left: NSBox!
+    @IBOutlet weak var right: NSBox!
+
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
         if (sender.numberOfValidItemsForDrop == 1) {
             let pasteboard = sender.draggingPasteboard
@@ -140,7 +135,7 @@ class IODevicesViewController: NSViewController, NSWindowDelegate, NSTabViewDele
 
     @IBOutlet weak var mediaView: MediaView!
     @IBOutlet weak var printerView: PrinterView!
-    
+
 
     func tabView(_ tabView: NSTabView, didSelect: NSTabViewItem?) {
         statusTimer?.invalidate()
@@ -151,10 +146,14 @@ class IODevicesViewController: NSViewController, NSWindowDelegate, NSTabViewDele
         case mediaTab:
             statusTimer = Timer.scheduledTimer(timeInterval: 0.2, target: self, selector: #selector(statusTimerPop), userInfo: nil, repeats: true)
             mediaOutline.reloadData()
+            machine.set("MediaTab", "M")
             
         case printerTab:
+            statusTimer?.invalidate()
+            statusTimer = nil
             printerOutline.reloadData()
-            
+            machine.set("MediaTab", "P")
+
         default: break
         }
     }
@@ -180,6 +179,9 @@ class IODevicesViewController: NSViewController, NSWindowDelegate, NSTabViewDele
 
         mediaOutline.dataSource = mediaView
         mediaOutline.delegate = mediaView
+        mediaOutline.intercellSpacing = CGSize(width: 0, height: 30)
+        mediaOutline.gridColor = .clear
+        mediaOutline.gridStyleMask = []
         mediaOutline.reloadData()
         
         printerOutline.dataSource = printerView
@@ -190,13 +192,28 @@ class IODevicesViewController: NSViewController, NSWindowDelegate, NSTabViewDele
         if let w = view.window {
             w.delegate = self
         }
-        tabView(ioTabView, didSelect: mediaTab)
+        
+        if ("M" == machine.getSetting("MediaTab", "M")) {
+            ioTabView.selectTabViewItem(mediaTab)
+            statusTimer = Timer.scheduledTimer(timeInterval: 0.2, target: self, selector: #selector(statusTimerPop), userInfo: nil, repeats: true)
+        }
+        else {
+            ioTabView.selectTabViewItem(printerTab)
+        }
     }
     
     
 // Mountable Devices Tab
+    @IBAction func buttonClearSelectionClick(_ sender: Any) {
+        mediaOutline.selectRowIndexes([], byExtendingSelection: false)
+    }
     
+
     @IBAction func buttonClearPathClick(_ sender: Any) {
+        mediaView.clearPathEditor()
+        if (!mediaOutline.selectedRowIndexes.isEmpty) {
+            mediaOutline.selectRowIndexes([], byExtendingSelection: false)
+        }
         if let button = sender as? NSButton,
            let cell = button.superview as? MediaCellView,
            let item = cell.objectValue as? IODeviceReference,
@@ -264,7 +281,7 @@ class IODevicesViewController: NSViewController, NSWindowDelegate, NSTabViewDele
                 let ro: Bool = siggyApp.alertYesNo(message: "Mount Read-Only?", detail: "Prevent data from being changed?", yesText: "READ", noText: "UPDATE")
                 if (!ro) {
                     openPanel = NSSavePanel()
-                    openPanel.message                 = "Select Ouput .dp File for \(item.device.name)"
+                    openPanel.message                 = "Select Output .dp File for \(item.device.name)"
                 }
                 else {
                     openPanel = NSOpenPanel();
@@ -374,7 +391,27 @@ class IODevicesViewController: NSViewController, NSWindowDelegate, NSTabViewDele
         }
     }
 
-    
+    @IBAction func buttonMediaInfoClick(_ sender: Any) {
+        if let button = sender as? NSButton,
+           let cell = button.superview as? MediaCellView,
+           let item = cell.objectValue as? IODeviceReference,
+           let d = item.device as? BlockDevice {
+            if (d.mediaViewController != nil) {
+                d.mediaViewController?.showWindow(self)
+            }
+            else {
+                let vc = MediaDetailViewController(nibName: nil, bundle: nil)
+                let wc = SiggyWindowController(window: NSWindow(contentViewController: vc))
+                d.mediaViewController = wc
+                wc.window?.delegate = vc
+                vc.setDevice(d)
+                wc.showWindow(self)
+                wc.window?.title = machine.name
+                wc.windowFrameAutosaveName = "MediaDetail"
+            }
+        }
+    }
+
     //MARK: PRINTERS TAB
 
     @IBAction func buttonShowVFCClick(_ sender: Any) {
@@ -428,6 +465,9 @@ class IODevicesViewController: NSViewController, NSWindowDelegate, NSTabViewDele
            let item = cell.objectValue as? IODeviceReference,
            let d = item.device as? PrintDevice {
             d.config.fontName = combo.stringValue
+            if (d.config.fontName == "Default") {
+                d.config.fontName = PDFOutputFile.defaultPrinterFont
+            }
             d.applyConfiguration()
             machine.updateDeviceDB(from: d)
         }
@@ -456,6 +496,13 @@ class MediaView: NSView, NSOutlineViewDelegate, NSOutlineViewDataSource {
     var machine: VirtualMachine?
     var deviceList: [IODeviceReference] = []
     var pathEditor: NSTextField!
+    
+    func clearPathEditor() {
+        if (pathEditor != nil) {
+            pathEditor?.removeFromSuperview()
+            pathEditor = nil
+        }
+    }
     
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
         if (deviceList.count == 0), let m = machine {
@@ -512,40 +559,57 @@ class MediaView: NSView, NSOutlineViewDelegate, NSOutlineViewDataSource {
             if let ready = view.buttonAutomatic {
                 ready.state = controlState(ioDevice.device.dsbAutomatic)
             }
-            
+            view.buttonMediaInfo.isEnabled = false
+
+            if ioDevice.device is CharacterDevice {
+                view.ring.isHidden = true
+                view.erase.isHidden = true
+                view.buttonAutomatic.isEnabled = ioDevice.device.isReady()
+                view.buttonAutomatic.state = controlState(ioDevice.device.dsbAutomatic)
+            }
+            else {
+                view.ring.state = controlState(ioDevice.isWritable)
+                view.ring.isHidden = false
+                view.ring.isEnabled = true
+                view.ring.tag = deviceList.firstIndex(of: ioDevice) ?? -1
+                view.erase.isHidden = false
+            }
+
             if let path = view.path {
-                if ioDevice.device is CharacterDevice {
-                    path.stringValue = ioDevice.path ?? ""
-                    view.ring.isHidden = true
-                    view.erase.isHidden = true
-                    view.buttonAutomatic.isEnabled = ioDevice.device.isReady()
-                    view.buttonAutomatic.state = controlState(ioDevice.device.dsbAutomatic)
-                }
-                else if let ap = ioDevice.path {
+                if let ap = ioDevice.path {
                     path.stringValue = ap
-                    view.ring.state = controlState(ioDevice.isWritable)
-                    view.ring.isHidden = false
-                    view.ring.isEnabled = true
-                    view.ring.tag = deviceList.firstIndex(of: ioDevice) ?? -1
-                    view.erase.isHidden = false
+                    view.buttonMediaInfo.isEnabled = true
                 }
                 else {
                     path.stringValue = ""
-                    view.ring.isHidden = false
-                    view.ring.state = .off
-                    view.ring.isEnabled = false
-                    view.erase.isHidden = false
                 }
             }
             
             if let status = view.status {
-                status.stringValue = ioDevice.status
+                let ms = ioDevice.device.mediaStatus()
+                if (ms.mounted) {
+                    //MARK: set image based on position
+                    var ds = "POSITION: ."+hexOut(ms.position,width:8)
+                    if (ms.totalSize > 0) {
+                        ds += String(format:" [%d%%]", (ms.position*100)/ms.totalSize)
+                    }
+                    if (ms.specifics != "") { ds.addToCommaSeparatedList(ms.specifics) }
+                    status.stringValue = ds
+                }
+                else {
+                    status.stringValue = "NO MEDIA MOUNTED"
+                }
             }
             
             if let disconnect = view.buttonPathClear {
                 if (disconnect.image == nil) {
                     disconnect.title = "X"
                 }
+                disconnect.isEnabled = true
+            }
+            
+            if let browse = view.buttonBrowse {
+                browse.isEnabled = true
             }
             
             view.objectValue = item
@@ -580,13 +644,13 @@ class MediaView: NSView, NSOutlineViewDelegate, NSOutlineViewDataSource {
         let row = outlineView.selectedRow
         if let item = outlineView.item(atRow: row) as? IODeviceReference,
            let cell = item.cell as? MediaCellView {
-            if let p = cell.path {
-                //let o = cell.convert(p.frame.origin, to: cell.superview)
+            if let p = cell.path,
+               let v = p.superview {
                 let o = p.frame.origin
                 let s = CGSize(width: p.frame.width , height: p.frame.height)
                 let f = NSRect(origin: o, size: s)
                 pathEditor = NSTextField(frame: f)
-                cell.addSubview(pathEditor!)
+                v.addSubview(pathEditor!)
                 
                 pathEditor?.stringValue = p.stringValue
                 pathEditor?.textColor = .black
@@ -686,14 +750,19 @@ class PrinterView: NSView, NSOutlineViewDelegate, NSOutlineViewDataSource {
                     
                 if let font = cell.comboFont {
                     font.removeAllItems()
-                    font.addItem(withObjectValue: "Courier")
+                    font.addItem(withObjectValue: "Default")
                     let allFonts = NSFontManager.shared.availableFonts
                     for f in allFonts {
                         if (NSFontManager.shared.fontNamed(f, hasTraits: .fixedPitchFontMask)) {
                             font.addItem(withObjectValue: f)
                         }
                     }
-                    font.selectItem(withObjectValue: pdf.config.fontName)
+                    if (pdf.config.fontName == PDFOutputFile.defaultPrinterFont) {
+                        font.selectItem(at: 0)
+                    }
+                    else {
+                        font.selectItem(withObjectValue: pdf.config.fontName)
+                    }
                 }
             }
             

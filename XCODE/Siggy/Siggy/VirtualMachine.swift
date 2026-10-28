@@ -19,20 +19,21 @@ var kInterruptPriority = 0.4
 //let kIOPMaxActiveIOs = 16                   // MUST BE > #COCs, SHOULD BE 16
 
 // These simulate time elapsing at "normal" or at least tolerable siggy speeds.
-let kPowerOnTime = 1.0
-let kInterruptCycleTime = 0.0002            // Check clock every 200 microseconds
-let kIOStartTime = 0.000                    // IO Set-up time
-let kIOCompletionTime = 0.000               // Wait time at end of IO
-let kCPUFault = 0.01                        // Loop wait after CPU fault
-let kCPURelease = 0.0                       // Time to wait after every n instructions.. This is only to cause threads to be rescheduled
-let kPrinterLineTime = 0.0005               // Time for lineprinter to print a line
-let kPunchLineTime = 0.0005                 // Time to deliver the joke
-let kCardReadTime = 0.0005                  // Time to read a card
-let kTapeRewindTime = 1.0                   // Pretty fast, really.
-let kTapeSpaceTime = 0.01                   // Pretty fast, really.
-let kTDVTime = 0.00                         // KLUDGE. Wait for things to quiesce.
-//let kMinimumWaitTime = 0.000                // KLUDGE. Wait for things to quiesce ** DO NOT USE **
+let kPowerOnTime        = 1.0
+let kInterruptCycleTime = 0.0001            // Check clock every 100 microseconds
+let kIOStartTime        = 0.000             // IO Set-up time
+let kIOCompletionTime   = 0.000             // Wait time at end of IO
+let kCPUFault           = 0.01              // Loop wait after CPU fault
+let kCPURelease         = 0.00              // Time to wait after every n instructions.. This is only to cause threads to be rescheduled
+let kPrinterLineTime    = 0.0005            // Time for lineprinter (or console) to print a line
+let kPunchLineTime      = 0.0005            // Time to deliver the joke
+let kCardReadTime       = 0.0005            // Time to read a card
+let kTapeRewindTime     = 1.0               // Pretty fast, really.
+let kTapeSpaceTime      = 0.01              // Pretty fast, really.
+let kTapeIOTime         = 0.00              // Tape reads and writes.
+let kTDVTime            = 0.00              // KLUDGE. Wait for things to quiesce.
 let kCharacterTransmissionTime = 0.000      // As fast as possible
+
 
 // MARK: Generalized disk address
 struct DiskAddress {
@@ -297,6 +298,16 @@ class RealMemory: Any {
         zeroBytes.initializeMemory(as: UInt64.self, to: 0)
         
         clear()
+    }
+    
+    deinit {
+        for i in 0 ... pageCount-1 {
+            realPages[i]?.bytes.deallocate()
+        }
+        pageReads.deallocate()
+        pageWrites.deallocate()
+        executionCount.deallocate()
+        zeroBytes.deallocate()
     }
     
     func clear() {
@@ -680,6 +691,7 @@ class VirtualMachine: NSObject {
     
     private var autoBoot: Bool = false
     private var dateTranslation: Bool = false
+    private var bootSwitches: UInt4 = 0
     private var bootDevice: Int = 0
     private var bootedLast: Int = 0
     private var memoryPages: Int = 0
@@ -695,23 +707,24 @@ class VirtualMachine: NSObject {
     static let kAutoBatch = "AutoBatch"
     static let kBootDevice = "BootDevice"
     static let kBootedLast = "BootedLast"
+    static let kCardDirectory = "CardDirectory"
     static let kDateCreated = "DateCreated"
     static let kDateTranslation = "DateTranslation"
-    static let kMemoryPages = "MemoryPages"
-    static let kName = "Name"
-    static let kMapClock4 = "MapClock4"
-    static let kOptimizeClocks = "OptimizeClocks"
-    static let kOptimizeWaits = "OptimizeBDRWait"
     static let kDecimalInstructions = "DecimalInstructions"
     static let kDecimalTrace = "DecimalTrace"
+    static let kDiskDirectory = "DiskDirectory"
     static let kFloatingPoint = "FloatInstructions"
     static let kFloatTrace = "FloatTrace"
-    static let kReportDirectory = "ReportDirectory"
-    static let kTapeDirectory = "TapeDirectory"
-    static let kDiskDirectory = "DiskDirectory"
-    static let kCardDirectory = "CardDirectory"
     static let kLogConsoleReads = "LogConsoleReads"
     static let kLogConsoleWrites = "LogConsoleWrites"
+    static let kMapClock4 = "MapClock4"
+    static let kMemoryPages = "MemoryPages"
+    static let kName = "Name"
+    static let kOptimizeClocks = "OptimizeClocks"
+    static let kOptimizeWaits = "OptimizeBDRWait"
+    static let kReportDirectory = "ReportDirectory"
+    static let kSenseSwitches = "SenseSwitches"
+    static let kTapeDirectory = "TapeDirectory"
     
     
     // CP-V related data
@@ -734,9 +747,12 @@ class VirtualMachine: NSObject {
     var cpu: CPU!
     var iopTable: [IOP?] = []
     var iopCount: Int { get { var c = 0; for i in iopTable { if (i != nil) {c += 1}}; return c }}
-    var senseSwitches: UInt4 { return viewController.senseSwitches }
     var isRunning: Bool { return (cpu != nil) && (cpu.isRunning) }
-    
+
+    var senseSwitches: UInt4 = 0
+    var watchDogOverride: Bool = false
+    var waitModeDiagnostic: Bool = false
+
     init(_ url: URL!,_ create: Bool,_ installBase: Bool = false) {
         super.init()
 
@@ -762,7 +778,7 @@ class VirtualMachine: NSObject {
     }
     var prefix: String { get { return logPrefix() }}
     
-    func log(level: MSLogManager.LogLevel = .always,_ line: String, functionName: String = #function, lineNumber: Int = #line) {
+    func log(level: MSLogManager.LogLevel = .minimum,_ line: String, functionName: String = #function, lineNumber: Int = #line) {
         MSLog (level: level, logPrefix()+": "+line, function: functionName, line: lineNumber)
     }
     
@@ -882,7 +898,10 @@ class VirtualMachine: NSObject {
     
     // Get a global float setting
     func getDoubleSetting(_ name: String,_ d: Double) -> Double {
-        if let s = getSetting(name), let d = Double(s) { return d }
+        if let s = getSetting(name),
+           let d = Double(s) {
+            return d
+        }
         return d
     }
     
@@ -1019,6 +1038,20 @@ class VirtualMachine: NSObject {
         stmt.done()
     }
     
+    func updateDeviceDB(_ addr: UInt16, path: String) {
+        let stmt = SQLStatement(db)
+        if !stmt.prepare (statement: "UPDATE DEVICES SET hostpath = ? WHERE (address =  \(addr))") {
+            siggyApp.applicationDBSQLError ("PREPARE failed");
+        }
+        if !path.isEmpty {
+            stmt.bind_string(1, path)
+        }
+        if !stmt.execute() {
+            siggyApp.applicationDBSQLError ("UPDATE failed")
+        }
+        stmt.done()
+    }
+
     func updateDeviceDB (from d: Device) {
         
         let stmt = SQLStatement(db)
@@ -1152,7 +1185,7 @@ class VirtualMachine: NSObject {
         
         // Create initial device configs
         let console = addDevice(address: 0x001, type: "TY", model: 7012) as? TTYDevice
-        _ = addDevice(address: 0x002, type: "LP", model: 7450, hostFile: "lpa02", intData: [42], stringData: "FONT:MENLO;PAPER:PRINTER" )
+        _ = addDevice(address: 0x002, type: "LP", model: 7450, hostFile: "lpa02", intData: [42], stringData: "FONT:COURIER;PAPER:PRINTER" )
         _ = addDevice(address: 0x003, type: "CR", model: 7140, hostFile: "cra03")
         _ = addDevice(address: 0x004, type: "CP", model: 7165, hostFile: "cpa04", flags: [1,0])
         _ = addDevice(address: 0x006, type: "ME", model: 7611, interrupt: 0x60, intData: [60,1], flags: [0,0])
@@ -1169,13 +1202,21 @@ class VirtualMachine: NSObject {
         _ = addDevice(address: 0x1F1, type: "DP", model: 7277, hostFile: "dpbf1.dp")
         _ = addDevice(address: 0x1F2, type: "DP", model: 7277, hostFile: "dpbf2.dp")
         _ = addDevice(address: 0x1F3, type: "DP", model: 7277, hostFile: "dpbf3.dp")
-        
         if !installBase {
-            _ = addDevice(address: 0x1F4, type: "DP", model: 7277, mountable: true)
-            _ = addDevice(address: 0x1F5, type: "DP", model: 7277, mountable: true)
-            _ = addDevice(address: 0x1F6, type: "DP", model: 7277, mountable: true)
-            _ = addDevice(address: 0x1F7, type: "DP", model: 7277, mountable: true)
+            _ = addDevice(address: 0x1F4, type: "DP", model: 7277, hostFile: "dpbf4.dp")
+            _ = addDevice(address: 0x1F5, type: "DP", model: 7277, hostFile: "dpbf5.dp")
+            _ = addDevice(address: 0x1F6, type: "DP", model: 7277, hostFile: "dpbf6.dp")
+            _ = addDevice(address: 0x1F7, type: "DP", model: 7277, hostFile: "dpbf7.dp")
             
+            _ = addDevice(address: 0x1F8, type: "DP", model: 7277, mountable: true)
+            _ = addDevice(address: 0x1F9, type: "DP", model: 7277, mountable: true)
+            _ = addDevice(address: 0x1FA, type: "DP", model: 7277, mountable: true)
+            _ = addDevice(address: 0x1FB, type: "DP", model: 7277, mountable: true)
+            _ = addDevice(address: 0x1FC, type: "DP", model: 7277, mountable: true)
+            _ = addDevice(address: 0x1FD, type: "DP", model: 7277, mountable: true)
+            _ = addDevice(address: 0x1FE, type: "DP", model: 7277, mountable: true)
+            _ = addDevice(address: 0x1FF, type: "DP", model: 7277, mountable: true)
+
             _ = addDevice(address: 0x2f0, type: "DC", model: 3214, hostFile: "dccf0.dc")
             _ = addDevice(address: 0x2f1, type: "DC", model: 3214, hostFile: "dccf1.dc")
             _ = addDevice(address: 0x2f2, type: "DC", model: 3214, hostFile: "dccf2.dc")
@@ -1243,6 +1284,8 @@ class VirtualMachine: NSObject {
     func loadConfiguration (_ url: URL!) {
         var console: TTYDevice?
         
+        iopTable.removeAll()
+        
         name = url.deletingPathExtension().lastPathComponent + ":" + getSetting(VirtualMachine.kName, "*")
         
         
@@ -1252,6 +1295,8 @@ class VirtualMachine: NSObject {
         if let dx = getSetting(VirtualMachine.kDateTranslation) {
             dateTranslation = (dx == "Y")
         }
+        
+        bootSwitches = UInt4(hexIn(hex: getSetting(VirtualMachine.kSenseSwitches), defaultValue: 0) & 0xF)
         bootDevice = hexIn(hex: getSetting(VirtualMachine.kBootDevice), defaultValue: 0)
         bootedLast = hexIn(hex: getSetting(VirtualMachine.kBootedLast), defaultValue: 0)
         memoryPages = Int(getSetting(VirtualMachine.kMemoryPages, "256")) ?? 256
@@ -1352,7 +1397,7 @@ class VirtualMachine: NSObject {
             consoleTTY = nil
         }
 
-        iopTable.removeAll()
+        //iopTable.removeAll()
     }
     
     @objc func powerOn (_ sender: Any?) {
@@ -1388,7 +1433,8 @@ class VirtualMachine: NSObject {
         // Now update Panel
         let dev = (bootDevice > 0) ? bootDevice : bootedLast
         viewController.panelViewController.setBootDevice(dev)
-        
+        viewController.panelViewController.senseSwitches = bootSwitches
+
         if (dev > 0) {
             cpu.resetSystem()
             cpu.load(dev)

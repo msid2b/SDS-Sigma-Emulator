@@ -44,7 +44,8 @@ class SettingsViewController: NSViewController {
     @IBOutlet weak var checkAutoBoot: NSButton!
     @IBOutlet weak var comboBootDevice: NSComboBox!
     @IBOutlet weak var checkAutoDate: NSButton!
-
+    @IBOutlet weak var checkTranslateDate: NSButton!
+    
     @IBOutlet weak var comboDelta: NSComboBox!
     @IBOutlet weak var comboHGPRECON: NSComboBox!
     @IBOutlet weak var comboBatchRecovery: NSComboBox!
@@ -104,8 +105,10 @@ class SettingsViewController: NSViewController {
             checkFloatTrace.other = checkFloatingPoint; checkFloatTrace.trigger = .on
             checkFloatingPoint.other = checkFloatTrace; checkFloatingPoint.trigger = .off
 
-            checkAutoBoot.state = (machine.getSetting("AutoBoot", "N") == "Y") ? .on : .off
-            checkAutoDate.state = (machine.getSetting("AutoDate", "N") == "Y") ? .on : .off
+            checkAutoBoot.state = (machine.getSetting(VirtualMachine.kAutoBoot, "N") == "Y") ? .on : .off
+            checkAutoDate.state = (machine.getSetting(VirtualMachine.kAutoDate, "N") == "Y") ? .on : .off
+            checkTranslateDate.state = (machine.getSetting(VirtualMachine.kDateTranslation,"N") == "Y") ? .on : .off
+
 
             switch (machine.getSetting("BootDevice")) {
             case "080":
@@ -285,9 +288,10 @@ class SettingsViewController: NSViewController {
             machine.set(VirtualMachine.kFloatTrace, controlYN(checkFloatTrace))
             
             
-            machine.set("AutoBoot", (checkAutoBoot.state == .on) ? "Y" : "N")
-            machine.set("AutoDate", (checkAutoDate.state == .on) ? "Y" : "N")
-            
+            machine.set(VirtualMachine.kAutoBoot, (checkAutoBoot.state == .on) ? "Y" : "N")
+            machine.set(VirtualMachine.kAutoDate, (checkAutoDate.state == .on) ? "Y" : "N")
+            machine.set(VirtualMachine.kDateTranslation, (checkTranslateDate.state == .on) ? "Y" : "N")
+
             switch (comboBootDevice.stringValue) {
             case "080", "1F0", "2F0":
                 machine.set("BootDevice", comboBootDevice.stringValue)

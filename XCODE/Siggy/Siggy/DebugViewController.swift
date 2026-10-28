@@ -1201,6 +1201,9 @@ class DSTrace: NSObject, NSTableViewDataSource {
             else if cID == "MAP" {
                 return e.mapped ? "M" : "U"
             }
+            else if cID == "USER" {
+                return hexOut(e.user, width:2)
+            }
             else if cID == "COUNT" {
                 return String(e.count)
             }

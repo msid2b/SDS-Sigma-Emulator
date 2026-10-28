@@ -24,7 +24,7 @@
 //
 //MARK: END OF LICENSE
 
-//  Emulates decimal instructions.
+//  Emulates Sigma Decimal instructions.
 //  Typically, operands are checked and converted to 128 bit integers, on which
 //  the operation is then performed.   The result is converted back to packed decimal
 //  in the accumulator.
@@ -219,9 +219,10 @@ extension CPU {
         psd.zCC &= 0x3
         
         let length = (zInstruction.register > 0) ? Int(zInstruction.register) : 16
+        instructionIterations = length
         
         switch (zInstruction.opCode) {
-        case 0x76:                      //MARK: PACK
+        case 0x76:                                              //MARK: PACK
             var value: Int128 = 0
             var zone: UInt8 = 0
             var n = (length << 1) - 1
@@ -487,7 +488,7 @@ extension CPU {
             iUnimplemented()
             return
         }
-        
+                
         if (decimalTrace) {
             machine.consoleTTY.logToConsole("END ** \(zInstruction.getDisplayText()), DECA=\(hexOut(getRegisterUnsignedWord(0xC),width:8)) \(hexOut(getRegisterUnsignedWord(0xD),width:8)) \(hexOut(getRegisterUnsignedWord(0xE),width:8)) \(hexOut(getRegisterUnsignedWord(0xF),width:8))")
         }
@@ -502,6 +503,8 @@ extension CPU {
         let r = zInstruction.register
         let d = getRegisterUnsignedWord(r.u1)
         let count = Int(d >> 24)
+        instructionIterations = count
+        
         let pa = Int(d & 0x7FFFF)
         var da = pa
         

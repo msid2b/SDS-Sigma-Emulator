@@ -82,7 +82,7 @@ class VMViewController:  NSViewController, NSWindowDelegate {
                 if (pw != designSize.width) || (ph != designSize.height)  {
                     view.scaleUnitSquare(to: NSSize(width: pw/designSize.width, height: ph/designSize.height))
                 }
-                mw.setFrame(NSRect(origin: CGPoint(x: px,y: py+(designSize.height-ph)), size: CGSize(width: pw, height: ph+designHead)), display: true)
+                mw.setFrame(NSRect(origin: CGPoint(x: px,y: py), size: CGSize(width: pw, height: ph+designHead)), display: true)
                 
             }
         }
@@ -141,8 +141,7 @@ class VMViewController:  NSViewController, NSWindowDelegate {
     }
     
     var isPanelView: Bool { return (mainTabViewController.selectedTabViewItem == panelTab) }
-    var senseSwitches: UInt4 { return panelViewController.senseSwitches }
-    
+
     @objc func powerOn () {
     }
 

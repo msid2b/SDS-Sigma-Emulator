@@ -27,6 +27,13 @@ class TTYTextView: NSTextView {
     var previousLine: [String] = []
     var previousIndex: Int = 0
     
+    
+    func configure (controller: TTYViewController?, foreground: NSColor?) {
+        self.viewController = controller!
+        self.foregroundColor = foreground!
+    }
+    
+    
     override func keyDown(with event: NSEvent) {
     }
     
@@ -46,7 +53,7 @@ class TTYTextView: NSTextView {
             selectedTextAttributes = insertMode ? [.foregroundColor : foregroundColor!] : [.backgroundColor : editColor!, .foregroundColor : backgroundColor ]
         }
 
-        
+        var eventChars = event.characters
         if let vc = window?.contentViewController as? TTYViewController {
             var handled = false
             if let key = event.specialKey {
@@ -121,6 +128,8 @@ class TTYTextView: NSTextView {
                 }
                 else {
                     // MARK: Not edit mode
+                    handled = true
+                    
                     switch (key) {
                     case .upArrow:
                         if (inputLine == "") && (!previousLine.isEmpty) {
@@ -133,21 +142,36 @@ class TTYTextView: NSTextView {
                             inputLine = previousLine[previousIndex]
                             inputPosition = inputLine.count
                             updateEditLine()
-                            handled = true
                         }
 
                     case .delete, .tab, .carriageReturn:
                         handled = false             // ALLOW THESE
                         
+                    case .downArrow:
+                        eventChars = String(Character(UnicodeScalar(0x0a)))
+                        handled = false
+                    
+                    case .pageUp:
+                        self.scrollPageUp(self)
+
+                    case .pageDown:
+                        self.scrollPageDown(self)
+
+                    case .home:
+                        self.scrollToBeginningOfDocument(self)
+
+                    case .end:
+                        self.scrollToEndOfDocument(self)
+
                     default:                        // IGNORE EVERYTHING ELSE
-                        handled = true
+                        break
                     }
                 }
             }
             
 
             //MARK: Deal with regular keys and unhandled special ones
-            if !handled, var s = event.characters {
+            if !handled, var s = eventChars {
                 if (editMode) {
                     if (vc.checkCapsLock.state == .on) { s = s.uppercased() }
                     
@@ -227,10 +251,17 @@ protocol TTYDelegate {
     func autoSettingChanged(_ id: Int,_ enabled: Bool)
     func characterIn (_ id: Int, _ c: Character, isBreak: Bool)
     func windowShouldClose(_ id: Int) -> Bool
-    func windowDidResize(_ id: Int, _ height: Int,_ width: Int)
+    func windowDidResize(_ id: Int, width: Int, height: Int)
     func windowDidMove(_ id: Int,_ origin: CGPoint)
-    func styleDidChange(_ id: Int,_ styleNumber: Int)
+    func fontDidChange(_ id: Int, fontName: String, fontSize: Double, fgColor:NSColor, bgColor: NSColor)
     func startPasteWindow(_ id: Int)
+}
+
+enum TTYOption {
+    case auto
+    case capsLock
+    case interrupt
+    case isbreak
 }
 
 
@@ -238,7 +269,7 @@ protocol TTYDelegate {
 // MARK: Each character output operation initiated by WD is asyncronous and independent.
 // MARK: They are independent threads started from the OutputOperation queue
 
-class TTYViewController: NSViewController, NSWindowDelegate, PasteBufferDelegate {
+class TTYViewController: NSViewController, NSWindowDelegate, NSTextViewDelegate, PasteBufferDelegate {
     @IBOutlet weak var scrollView: NSScrollView!
     @IBOutlet weak var clipView: NSClipView!
     @IBOutlet weak var scrollerVertical: NSScroller!
@@ -252,26 +283,21 @@ class TTYViewController: NSViewController, NSWindowDelegate, PasteBufferDelegate
     @IBOutlet weak var buttonLog: NSButton!
     @IBOutlet weak var buttonPaste: NSButton!
     @IBOutlet weak var labelStatus: NSTextField!
-    @IBOutlet weak var comboStyle: NSComboBox!
     
-    struct Style {
-        var interruptButtonTitle: String = ""
-        
-        var font: NSFont! = NSFont(name: "BitstreamVeraSansMono-Roman", size: 15) ?? NSFont(name: "Menlo", size: 15)
-        var backgroundColor: NSColor = .init(red: 0.87, green: 0.87, blue: 0.89, alpha: 1)
-        var foregroundColor: NSColor = .black
-        
-        var forceUppercase: Bool = false
-        var autoButton: Bool = false
-    }
-    
-    var styleList: [(String, Style)] = []
-    
+    @IBOutlet weak var boxFont: NSBox!
+    @IBOutlet weak var comboFont: NSComboBox!
+    @IBOutlet weak var textFontSize: NSTextField!
+    @IBOutlet weak var sliderFontSize: NSSlider!
+    @IBOutlet weak var stepperFontSize: NSStepper!
+    @IBOutlet weak var colorBackground: NSColorWell!
+    @IBOutlet weak var colorForeground: NSColorWell!
+
     //MARK: COC for tereminals, ConsoleWindow for Console.
     private var id: Int = -1
     var delegateID: Int { get { return id } set { id = newValue }}
     var delegate: TTYDelegate?
     var name: String?
+    let defaultFont = NSFont(name: "Courier", size: 12.0)!
     
     var windowController: TTYWindowController?
     
@@ -279,6 +305,12 @@ class TTYViewController: NSViewController, NSWindowDelegate, PasteBufferDelegate
     var lastInputTime: MSTimestamp = 0
     var inputQueue: String = ""
     var isResizing: Bool = false
+    
+    //MARK: screenWidth and screenHeight refer to the size of the terminal window in CG units
+    //MARK: characterWidth and characterHeight refer to the size of each character in CG units
+    //MARK: width and height refer to the size of the terminal in characters
+    let minScreenHeight: CGFloat = 400
+    let minScreenWidth: CGFloat = 800
     
     var logFileHandle: FileHandle?
     var buffer: String = ""
@@ -302,75 +334,84 @@ class TTYViewController: NSViewController, NSWindowDelegate, PasteBufferDelegate
         }
     }
     
-    func setViewSize(_ width: Int,_  height: Int) {
-        isResizing = true
-        if let _ = view.window, let f = textView.font {
-            let cWidth = f.maximumAdvancement.width
-            let cHeight = f.ascender - f.descender
-            
-            var tWidth = cWidth * CGFloat(width) * 1.02 + scrollView.scrollerInsets.right
-            var tHeight = cHeight * CGFloat(height) * 1.02 + (boxFooter.frame.height + boxHeader.frame.height)
-            
-            if let sWidth = NSScreen.main?.frame.width, let sHeight = NSScreen.main?.frame.height {
-                tWidth = min(tWidth, sWidth)
-                tHeight = min(tHeight, sHeight)
-                
-                if var f = view.window?.frame {
-                    f.size = CGSize(width: tWidth, height: tHeight)
-                    view.window?.setFrame(f, display: true)
-                }
-                labelDisplaySize.stringValue = "\(height) Lines X \(width) Characters"
-            }
-        }
-        isResizing = false
+    
+    func updateDisplaySize (_ width: Int,_ height: Int) {
+        labelDisplaySize.stringValue = "\(height) Lines X \(width) Characters"
     }
     
+    //MARK: Determine the terminal size in number of displayable characters
+    func calculateDisplayCharacterSize () -> (Int, Int) {
+        if let w = view.window, let f = textView.font {
+            let sWidth = max(minScreenWidth, w.frame.width) - scrollView.scrollerInsets.right
+            let sHeight = max(minScreenHeight, w.frame.height) - (boxFooter.frame.height + boxHeader.frame.height)
+            let cWidth = f.maximumAdvancement.width * 1.02
+            let cHeight = (f.ascender - f.descender) * 1.02
+            let width =  Int(sWidth/cWidth)
+            let height = Int(sHeight/cHeight)
+            return (width, height)
+        }
+        
+        //MARK: ** IMPOSSIBLE **
+        return (80,25)
+    }
     
-    func configure (name: String, defaultStyle: Style, styleSelection: Int, height: Int, width: Int) -> Bool {
-        self.name = name
-        textView.viewController = self
-        textView.font = defaultStyle.font ?? NSFont(name: "Courier", size: 15)
+    //MARK: Determine terminal window size from number of characters
+    func calculateDisplaySize (_ width: Int,_ height: Int) -> CGSize {
+        if let f = textView.font {
+            let cWidth = f.maximumAdvancement.width * 1.02
+            let cHeight = (f.ascender - f.descender) * 1.02
+            let sWidth = max(minScreenWidth, CGFloat(width)*cWidth)
+            let sHeight = max(minScreenHeight, CGFloat(height)*cHeight + (boxFooter.frame.height + boxHeader.frame.height))
+            return CGSize(width: sWidth, height: sHeight)
+        }
         
-        setViewSize(width, height)
-        
-        buttonInterrupt.isEnabled = (defaultStyle.interruptButtonTitle != "")
-        buttonInterrupt.title = defaultStyle.interruptButtonTitle
-        
-        textView.backgroundColor = defaultStyle.backgroundColor
-        textView.foregroundColor = defaultStyle.foregroundColor
-        
-        checkCapsLock.state = controlState(defaultStyle.forceUppercase)
-        checkAuto.isHidden = !defaultStyle.autoButton
-        
-        labelStatus.stringValue = ""
+        //MARK: ** IMPOSSIBLE **
+        return (CGSize(width: CGFloat(width*500),height: CGFloat(height*700)))
+    }
     
 
-        //MARK: Construct the Style options...
-        styleList.append (("Default Style", defaultStyle))
-        if let fontName = textView.font?.fontName {
-            styleList.append (("Cyan/Black Small", Style (font: NSFont(name: fontName, size: 12), backgroundColor: .black, foregroundColor: .cyan)))
-            styleList.append (("Yellow/Black Small", Style (font: NSFont(name: fontName, size: 12), backgroundColor: .black, foregroundColor: .yellow)))
-            styleList.append (("White/Black Small", Style (font: NSFont(name: fontName, size: 12), backgroundColor: .black, foregroundColor: .white)))
-            styleList.append (("Black/White Small", Style (font: NSFont(name: fontName, size: 12), backgroundColor: .white, foregroundColor: .black)))
-            styleList.append (("Yellow/Black Large", Style (font: NSFont(name: fontName, size: 15), backgroundColor: .black, foregroundColor: .yellow)))
-            styleList.append (("White/Black Large", Style (font: NSFont(name: fontName, size: 15), backgroundColor: .black, foregroundColor: .white)))
-            styleList.append (("Black/White Large", Style (font: NSFont(name: fontName, size: 15), backgroundColor: .white, foregroundColor: .black)))
-            styleList.append (("Yellow/Purple Large", Style (font: NSFont(name: fontName, size: 15), backgroundColor: .purple, foregroundColor: .yellow)))
-            styleList.append (("White/Purple Large", Style (font: NSFont(name: fontName, size: 15), backgroundColor: .purple, foregroundColor: .white)))
-            styleList.append (("White/Blue Large", Style (font: NSFont(name: fontName, size: 15), backgroundColor: .init(red: 0.25, green: 0.4, blue: 0.65, alpha: 1), foregroundColor: .white)))
-            styleList.append (("White/Red Large", Style (font: NSFont(name: fontName, size: 15), backgroundColor: .init(red: 0.6, green: 0.1, blue: 0.2, alpha: 1), foregroundColor: .white)))
+    func configure (name: String, font: NSFont?, foreground: NSColor?, background: NSColor?, height: Int, width: Int, options: [TTYOption]?) -> Bool {
+        self.name = name
+        textView.configure(controller: self, foreground: foreground)
+
+        labelStatus.stringValue = ""
+        if let options = options {
+            buttonInterrupt.isEnabled = options.contains(.interrupt)
+            buttonInterrupt.title = options.contains(.isbreak) ? "BREAK" : "INTERRUPT"
+            checkCapsLock.state = controlState(options.contains(.capsLock))
+            checkAuto.isHidden = !options.contains(.auto)
         }
         
-        //MARK: Set up combo
-        comboStyle.removeAllItems()
-        for (n,s) in styleList {
-            let a = NSAttributedString(string: n, attributes: [.font: s.font ?? textView.font!, .backgroundColor: s.backgroundColor, .foregroundColor: s.foregroundColor])
-            comboStyle.addItem(withObjectValue: a)
+        let f = font ?? defaultFont
+        sliderFontSize.doubleValue = Double(f.pointSize)
+        textFontSize.doubleValue = sliderFontSize.doubleValue
+        stepperFontSize.doubleValue = sliderFontSize.doubleValue
+        colorBackground.color = background ?? .white
+        colorForeground.color = foreground ?? .black
+        updateDisplaySize(width, height)
+
+    
+        //MARK: Determine available Fonts
+        comboFont.removeAllItems()
+        comboFont.addItem(withObjectValue: "Courier")
+        let allFonts = NSFontManager.shared.availableFonts
+        for f in allFonts {
+            if (NSFontManager.shared.fontNamed(f, hasTraits: .fixedPitchFontMask)) {
+                comboFont.addItem(withObjectValue: f)
+            }
         }
-        comboStyle.selectItem(at: styleSelection)
-        comboStyleChange(self)
+        comboFont.selectItem(withObjectValue: f.fontName)
         
+        //MARK: Controls are initialized, now set up textView
+        textView.font = f
+        textView.textColor = colorForeground.color
+        textView.backgroundColor = colorBackground.color
+        textView.delegate = self
+        
+        //MARK: Finally, show the window.
         if let w = view.window {
+            let frame = CGRect(origin: w.frame.origin, size: calculateDisplaySize(width, height))
+            w.setFrame(frame, display: false)
             w.makeFirstResponder(textView)
             w.delegate = self
             w.title = self.name ?? "TTY"
@@ -384,18 +425,24 @@ class TTYViewController: NSViewController, NSWindowDelegate, PasteBufferDelegate
     }
     
     func windowDidResize(_ notification: Notification) {
-        guard (isResizing == false) else { return }
+        if (isResizing) { return }
         if let w = notification.object as? NSWindow, let f = textView.font {
-            let tWidth = max(100, w.frame.width) - scrollView.scrollerInsets.right
-            let tHeight = max(100, w.frame.height) - (boxFooter.frame.height + boxHeader.frame.height)
-            
+            let sWidth = max(minScreenWidth,w.frame.width) - scrollView.scrollerInsets.right
+            let sHeight = max(minScreenHeight,w.frame.height) - (boxFooter.frame.height + boxHeader.frame.height)
+            if (w.frame.width < minScreenWidth) || (w.frame.height < minScreenHeight) {
+                isResizing = true
+                w.setFrame(CGRect(origin: w.frame.origin,
+                                  size: CGSize(width: sWidth+scrollView.scrollerInsets.right,
+                                               height: sHeight+(boxFooter.frame.height + boxHeader.frame.height))),
+                           display: true)
+                isResizing = false
+            }
             let cWidth = f.maximumAdvancement.width * 1.02
             let cHeight = (f.ascender - f.descender) * 1.02
-            
-            let width =  Int(tWidth/cWidth)
-            let height = Int(tHeight/cHeight)
-            labelDisplaySize.stringValue = "\(height) Lines X \(width) Characters"
-            delegate?.windowDidResize(delegateID, height, width)
+            let width =  Int(sWidth/cWidth)
+            let height = Int(sHeight/cHeight)
+            delegate?.windowDidResize(delegateID, width: width, height: height)
+            updateDisplaySize(width, height)
         }
     }
     
@@ -405,19 +452,50 @@ class TTYViewController: NSViewController, NSWindowDelegate, PasteBufferDelegate
         }
     }
     
-    @IBAction func comboStyleChange(_ sender: Any) {
-        let x = comboStyle.indexOfSelectedItem
-        if (x >= 0) {
-            let style = styleList[x].1
-            if let f = style.font {
-                textView.font = f
-            }
-            textView.foregroundColor = style.foregroundColor
-            textView.backgroundColor = style.backgroundColor
-            textView.textColor = style.foregroundColor
-            textView.needsDisplay = true
+    @IBAction func stepperClick(_ sender: Any) {
+        textFontSize.doubleValue = stepperFontSize.doubleValue
+        sliderFontSize.doubleValue = stepperFontSize.doubleValue
+        fontSizeChanged(sender)
+    }
+    
+    @IBAction func fontSizeChanged(_ sender: Any) {
+        if (sender is NSSlider) {
+            let s = sliderFontSize.doubleValue
+            let r = Double(Int(s*10))/10
+            textFontSize.doubleValue = r
         }
-        delegate?.styleDidChange(delegateID, x)
+        else {
+            var fontSize = textFontSize.doubleValue
+            fontSize = Double(Int(fontSize*10))/10
+            if (fontSize < sliderFontSize.minValue) {
+                fontSize = sliderFontSize.minValue
+            }
+            if (fontSize > sliderFontSize.maxValue) {
+                fontSize = sliderFontSize.maxValue
+            }
+            textFontSize.doubleValue = fontSize
+        }
+        sliderFontSize.doubleValue = textFontSize.doubleValue
+        stepperFontSize.doubleValue = textFontSize.doubleValue
+        fontChanged(sender)
+    }
+    
+    @IBAction func fontChanged(_ sender: Any) {
+        let fontSize = sliderFontSize.doubleValue
+        if let s = comboFont.objectValueOfSelectedItem as? String,
+           let f = NSFont(name: s, size: fontSize) {
+            textView.font = f
+            
+            let fg = colorForeground.color
+            let bg = colorBackground.color
+            textView.textColor = fg
+            textView.backgroundColor = bg
+            textView.needsDisplay = true
+            
+            delegate?.fontDidChange(delegateID, fontName: s, fontSize: fontSize, fgColor: fg, bgColor: bg)
+            let (w, h) = calculateDisplayCharacterSize()
+            updateDisplaySize(w, h)
+        }
     }
 
     
@@ -542,7 +620,7 @@ class TTYViewController: NSViewController, NSWindowDelegate, PasteBufferDelegate
     
     func update() {
         if access.acquire(waitFor: MSDate.ticksPerMillisecond) {
-            textView.textStorage?.append(NSAttributedString(string: buffer, attributes: [.font: textView.font!, .foregroundColor: textView.foregroundColor!]))
+            textView.textStorage?.append(NSAttributedString(string: buffer, attributes: [.font: textView.font!, .foregroundColor: textView.textColor!]))
             buffer = ""
             access.release()
             textView.moveToEndOfDocument(self)
@@ -603,6 +681,11 @@ class TTYViewController: NSViewController, NSWindowDelegate, PasteBufferDelegate
             write (String(cString: [a, 0]))
         }
     }
+    
+    // NSTextViewDelegate Functions:
+    func textView(_ textView: NSTextView, willChangeSelectionFromCharacterRange oldSelectedCharRange: NSRange, toCharacterRange newSelectedCharRange: NSRange) -> NSRange {
+        return newSelectedCharRange
+    }
 }
 
 //MARK: CONSOLE
@@ -641,13 +724,20 @@ class ConsoleController: NSObject, TTYDelegate {
             
             let ch = machine.getIntegerSetting("ConsoleHeight",25)
             let cw = machine.getIntegerSetting("ConsoleWidth", 80)
-            let styleNumber = machine.getIntegerSetting("ConsoleStyle", 0)
             let cx = machine.getDoubleSetting("ConsoleX", 0)
             let cy = machine.getDoubleSetting("ConsoleY", 0)
+            
+            let fontName = machine.getSetting("ConsoleFont", "Courier")
+            let fontSize = machine.getDoubleSetting("ConsoleFontSize", 11.0)
+            let fg = hexIn(hex: machine.getSetting("ConsoleFGColor"), defaultValue: 0xFF000000)
+            let bg = hexIn(hex: machine.getSetting("ConsoleBGColor"), defaultValue: 0xFFFFFFFF)
             if tty!.configure(name: title,
-                              defaultStyle: TTYViewController.Style(interruptButtonTitle: "Interrupt!", backgroundColor: .white, foregroundColor: .black, forceUppercase: true, autoButton: true),
-                              styleSelection: styleNumber, height: max(ch,10), width: max(cw,60)) {
-                tty!.setOrigin (CGPoint(x: cx, y: cy))
+                              font: NSFont(name: fontName, size: fontSize),
+                              foreground: NSColor(rgb32: fg),
+                              background: NSColor(rgb32: bg),
+                              height: max(ch,10), width: max(cw,60),
+                              options: [.auto, .interrupt, .capsLock]) {
+                 tty!.setOrigin (CGPoint(x: cx, y: cy))
                 return
             }
         }
@@ -672,13 +762,16 @@ class ConsoleController: NSObject, TTYDelegate {
         machine.set("ConsoleY", String(Double(origin.y)))
     }
 
-    func windowDidResize(_ id: Int,_ height: Int, _ width: Int) {
+    func windowDidResize(_ id: Int, width: Int, height: Int) {
         machine.set("ConsoleHeight",String(height))
         machine.set("ConsoleWidth", String(width))
     }
     
-    func styleDidChange(_ id: Int,_ styleNumber: Int) {
-        machine.set("ConsoleStyle", String(styleNumber))
+    func fontDidChange(_ id: Int, fontName: String, fontSize: Double, fgColor: NSColor, bgColor: NSColor) {
+        machine.set ("ConsoleFont", fontName)
+        machine.set ("ConsoleFontSize", String(format:"%4.1f",fontSize))
+        machine.set ("ConsoleFGColor", String(format:"%08X",fgColor.rgb32))
+        machine.set ("ConsoleBGColor", String(format:"%08X",bgColor.rgb32))
     }
     
     func startPasteWindow(_ id: Int) {

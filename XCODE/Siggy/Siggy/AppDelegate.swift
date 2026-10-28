@@ -73,12 +73,12 @@ class ApplicationDB {
         applicationDBDirectory = try! FileManager.default.url(for: .libraryDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
         let dbPath = applicationDBDirectory.appendingPathComponent(siggyApplicationName+".db").path
         if !applicationSQLDB.open(dbPath: dbPath) {
-            MSLog (level: .always, "Cannot open database: "+dbPath)
+            MSLog ("Cannot open database: "+dbPath)
             siggyApp.applicationDBSQLError("Application database open failed")
             NSApp.terminate(nil)
             return
         }
-        MSLog (level: .always, "Opened application database: "+dbPath)
+        MSLog ("Opened application database: "+dbPath)
         
         if !applicationSQLDB.execute("CREATE TABLE IF NOT EXISTS SETTINGS (name TEXT PRIMARY KEY, value TEXT)") {
             siggyApp.applicationDBSQLError("Cannot create SETTINGS table")
@@ -187,8 +187,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             alert.runModal();
         }
         else {
-            MSLog(level: .always, message)
-            MSLog(level: .always, detail)
+            MSLog(message)
+            MSLog(detail)
         }
     }
     
@@ -268,7 +268,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             logLevel = MSLogManager.LogLevel(rawValue: ll) ?? .detail
             MSLogManager.shared.setLogLevel(level: logLevel)
         }
-        MSLog (level: .always, siggyApplicationName+" starting.  Logging Level: "+logLevel.name)
+        MSLog (siggyApplicationName+" starting.  Logging Level: "+logLevel.name)
         
         // Show readme if not suppressed.
         if let readme = Int(ApplicationDB.shared.getGlobalSetting("README") ?? "0"), (readme == 0) {
@@ -285,8 +285,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         bundle = Bundle.main
         storyboard = NSStoryboard(name: "Main", bundle: bundle);
-        MSLog (level: .always, "Application did finish launching")
-        
+        MSLog ("Application did finish launching")
+
         if (MSLogManager.shared.logLevel >= .debug) {
             validateMSDate()
         }
@@ -301,14 +301,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     func applicationWillTerminate(_ aNotification: Notification) {
-        MSLog (level: .always, "Application will terminate")
+        MSLog ("Application will terminate")
     }
 
     //MARK: About Box
     @IBAction func applicationAbout(_ sender: Any) {
         if let wc = siggyApp.storyboard?.instantiateController(withIdentifier: "SiggyAboutWindow") as! NSWindowController?,
            let vc = wc.contentViewController as? AboutViewController {
-            vc.runModal(getCurrentMachine())
+            _ = vc.runModal(getCurrentMachine())
         }
     }
     
@@ -334,7 +334,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         for url in urls {
             let ext = url.pathExtension.lowercased()
             if (ext == applicationExtension) {
-                MSLog (level: .always, "Opening \(url.path)")
+                MSLog ("Opening \(url.path)")
                 perform (#selector(startMachineWindow), with: url, afterDelay: 0.05)
                 //startMachineWindow(url, create: false)
             }
@@ -664,8 +664,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             r.start()
         }
     }
-    
-    
+        
     @IBAction func menuCPVStatus(_ sender: Any) {
         if let m = currentMachine, let url = getReportDestination(m, "Machine Status") {
             let r = SystemStatusReport(m, url.path)

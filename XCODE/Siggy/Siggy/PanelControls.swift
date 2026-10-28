@@ -136,22 +136,7 @@ class PSwitch: NSSlider {
         self.bar = bar
         super.init(frame: frameRect)
         commonInit(isThreeWay)
-        
-        if (bar != nil) {
-            pTarget = target
-            pAction = action
-        
-            target = self
-            action = #selector(valueChanged)
-        }
     }
-    
-    @objc func valueChanged (sender: Any?) {
-        value = integerValue
-        _ = pTarget?.perform(pAction, with: sender)
-    }
-    
-    
 }
 
 class PSwitch3Way: PSwitch {
@@ -248,6 +233,8 @@ class PBar: NSBox {
                 else {
                     let r = NSRect(x:px, y:0, width: h, height: h*2)
                     let swtch = PSwitch.init(frame: r, isThreeWay: false, bar: self)
+                    swtch.target = self
+                    swtch.action = #selector(valueChanged)
                     self.addSubview(swtch)
                     bitSwitches[n] = swtch
                 }
@@ -296,7 +283,10 @@ class PBar: NSBox {
         
     }
     
-
+    @objc func valueChanged (sender: Any) {
+        //if let s = sender as? PSwitch {
+        //}
+    }
 }
 
 // This object is used to display a set of lights representing a binary integer.
@@ -307,7 +297,13 @@ class PLightBar: PBar {
 }
 
 // A corresponding set of switches is used to provide various binary input values.
+protocol PSwitchBarDelegate {
+    func manualSwitchChange(_ sender: Any)
+}
+
 class PSwitchBar: PBar {
+    var delegate: PSwitchBarDelegate?
+    
     func configure (bits: Int, mask: Int) {
         super.configure(bits: bits, mask: mask, isLight: false)
     }
@@ -319,7 +315,7 @@ class PSwitchBar: PBar {
                 
         while (n < bits) {
             if let s = bitSwitches[n] {
-                if (s.value != 0) {
+                if (s.integerValue != 0) {
                     v |= m
                 }
             }
@@ -329,5 +325,23 @@ class PSwitchBar: PBar {
         return v
         
     }
+    
+    func setSwitches (v: Int) {
+        var n: Int = 0
+        var m: Int = 1
+        
+        while (n < bits) {
+            if let s = bitSwitches[n] {
+                s.integerValue = ((v & m) == 0) ? 0 : 1
+            }
+            n += 1
+            m <<= 1
+        }
+    }
+    
+    @objc override func valueChanged (sender: Any) {
+        delegate?.manualSwitchChange(self)
+    }
+
 }
 

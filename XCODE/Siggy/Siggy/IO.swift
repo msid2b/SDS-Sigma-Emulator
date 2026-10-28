@@ -1,4 +1,5 @@
 //
+//
 //  IO.swift
 //  Siggy
 //
@@ -39,6 +40,9 @@ struct IORequest {
         case HIO
         case TIO
         case TDV
+        case RIO
+        case POLP
+        case POLR
     }
     
     var ioType: IOType
@@ -268,18 +272,17 @@ class IOP: NSObject {
                 }
                 dev.access.release()
                 access.release()
-                return 0x1                          // SIO NOT ACCEPTED
+                return 0x1                      // SIO NOT ACCEPTED
             }
             
             // clear operation status
             dev.operationalStatus = 0
             
-            if (rq.ioType == .SIO) {
-                dev.dsbCondition = 0x3              // NOW IT'S BUSY
-                dev.dsbUnusualEnd = false
-            }
-            
             let ready = dev.isReady()
+            if (rq.ioType == .SIO) && ready {
+                dev.dsbUnusualEnd = false
+                dev.dsbCondition = 0x3          // NOW IT'S BUSY
+            }
             dev.access.release()
             
             var cc: UInt4 = 0
@@ -305,6 +308,9 @@ class IOP: NSObject {
             case .TDV:
                 dev.tdv(&rq)
                 break
+                
+            default:
+                dev.log (level: .warning, "IOP REQUEST: \(rq.ioType), CDWADDR="+hexOut(rq.command,width:4)+", returning CC \(cc)")
             }
             
             access.release()
@@ -360,7 +366,7 @@ class IOP: NSObject {
     
     
     func shutdown() {
-        Thread.sleep(forTimeInterval: TimeInterval(2.0))
+        Thread.sleep(forTimeInterval: TimeInterval(1.0))
         for d in devices {
             d.ioQueue.cancelAllOperations()
             d.flush()
@@ -377,7 +383,7 @@ protocol IOCompletionDelegate: AnyObject {
     func ioComplete (_ rq: IORequest,_ device: Device)
 }
 
-class SIOOperation: Operation, Sendable {
+class SIOOperation: Operation, @unchecked Sendable {
     var rq: IORequest
     var device: Device
     var psd: UInt64
@@ -488,7 +494,7 @@ class Device: NSObject, IOCompletionDelegate {
         case directory = 4
     }
     
-    
+    var isInit: Bool = false            // Initialization has been completed.
     var machine: VirtualMachine!
     var access = SimpleMutex()
     var name: String                    // Full name
@@ -510,6 +516,7 @@ class Device: NSObject, IOCompletionDelegate {
     var mode: AccessMode
     var hostPath: String?
     var fileHandle: FileHandle!         // for hostPath; must be in sync
+    var fileSize: UInt64 = 0            // Cached eof value, set on open
     var ioQueue: OperationQueue
     
     var isInUse: Bool { get { return inUse() }}
@@ -617,7 +624,7 @@ class Device: NSObject, IOCompletionDelegate {
         return ("\(machine.name) [\(name)]")
     }
     
-    func log(level: MSLogManager.LogLevel = .always, _ msg: String, functionName: String = #function, lineNumber: Int = #line) {
+    func log(level: MSLogManager.LogLevel = .minimum, _ msg: String, functionName: String = #function, lineNumber: Int = #line) {
         MSLog(level: level, logPrefix()+": "+msg, function: functionName, line: lineNumber)
     }
     
@@ -645,6 +652,7 @@ class Device: NSObject, IOCompletionDelegate {
         super.init()
         _ = load (hostPath, mode: mode)
         
+        isInit = true
     }
     
     
@@ -695,6 +703,7 @@ class Device: NSObject, IOCompletionDelegate {
     func load (_ path: String, mode: AccessMode) -> Bool {
         var p = resolvePath(path)
         let url = URL(fileURLWithPath: p)
+        fileSize = 0
         
         switch (mode) {
         case .none:
@@ -704,6 +713,8 @@ class Device: NSObject, IOCompletionDelegate {
             do {
                 let fh = try FileHandle(forReadingFrom: URL(fileURLWithPath: p))
                 fileHandle = fh
+                let a = try FileManager.default.attributesOfItem(atPath: p)
+                fileSize = (a[.size] as? UInt64) ?? 0
             }
             catch {
                 log (level: .error, error.localizedDescription)
@@ -774,7 +785,15 @@ class Device: NSObject, IOCompletionDelegate {
     }
     
     //Get mount-state, position, media-file, and other device specific information
-    func mediaStatus() -> (Bool, UInt64, String, String) {
+    struct MediaStatus {
+        var mounted: Bool = false
+        var position: UInt64 = 0
+        var totalSize: UInt64 = 0
+        var hostInfo: String = ""
+        var specifics: String = ""
+    }
+    
+    func mediaStatus() -> MediaStatus {
         if let fh = fileHandle {
             var byteOffset: UInt64 = 0
             do {
@@ -782,11 +801,11 @@ class Device: NSObject, IOCompletionDelegate {
             }
             catch {
                 log(level: .error, error.localizedDescription)
-                return (false, 0, error.localizedDescription, "")
+                return MediaStatus(hostInfo: error.localizedDescription)
             }
-            return (true, byteOffset, "\(hostPath ?? "N/A")", "")
+            return MediaStatus(mounted: true, position: byteOffset, totalSize: fileSize, hostInfo: "\(hostPath ?? "N/A")")
         }
-        return (false, 0, "", "")
+        return MediaStatus()
     }
     
     //Get ready status -- just used for card reader
@@ -988,13 +1007,13 @@ class Device: NSObject, IOCompletionDelegate {
                             order = cdw.order
                         }
                         else {
-                            log("Data Chain, ioLen=\(ioLength)")
+                            log(level: .detail, "Data Chain, ioLen=\(ioLength)")
                         }
                     }
                     
                     else if (cdw.fInterruptCE) /* && (asbChannelEnd) */ {
                         if (!asbChannelEnd) {
-                            log("ORDER=.\(hexOut(order,width:2)): Implied Channel End")
+                            log(level: .detail, "ORDER=.\(hexOut(order,width:2)): Implied Channel End")
                         }
                         asbChannelEnd = true
                         dsbInterruptPending = true
@@ -1205,6 +1224,7 @@ class TTYDevice: CharacterDevice, ConsoleDelegate {
         if (trace) {
             log("MOVED TO MEMORY BA=\(hexOut(cdw.memoryAddress)), COUNT=X'\(hexOut(data.count))' BYTES")
         }
+        
         ioLength -= data.count
         asbChannelEnd = true
         return false
@@ -1217,6 +1237,8 @@ class TTYDevice: CharacterDevice, ConsoleDelegate {
         if (logWrites) { machine.log("CONSOLE WRITE: \"\(s)\"") }
 
         controller?.write(s)
+        if (kPrinterLineTime > 0) { Thread.sleep(forTimeInterval: kPrinterLineTime) }
+
         ioLength = 0
         if ((order & 0x4) != 0)
         {
@@ -1224,7 +1246,6 @@ class TTYDevice: CharacterDevice, ConsoleDelegate {
         }
         
         autoAnswer = controller.autoAnswer(s)
-        
         return false
     }
     
@@ -1609,7 +1630,7 @@ class PDFDevice: PrintDevice {
                     dsbAutomatic = false
                 }
                 else {
-                    pdfOut?.beginOutput(producer: "Burst", author: "MacSiggy", paper: config.paper, orientation: .landscape, margins: nil)
+                    pdfOut?.beginOutput(producer: self.name, creator: jobID, author: "MacSiggy", paper: config.paper, orientation: .landscape, margins: nil)
                     pdfOut?.newPage()
                     currentLine = 0
                     
@@ -2100,14 +2121,14 @@ class COCDevice: CharacterDevice, TTYDelegate, COCCompletionDelegate {
             if (a.bitIsSet(bit: i) && (i >= cocConfiguration.firstLine)) {
                 if let wc = siggyApp.storyboard?.instantiateController(withIdentifier: "TTYWindow") as! TTYWindowController?,
                    let vc = wc.contentViewController as? TTYViewController {
-                    _  = vc.configure(name: siggyApp.applicationName+" Terminal",
-                                      defaultStyle: TTYViewController.Style(interruptButtonTitle: "BREAK", forceUppercase: true),
-                                      styleSelection: 0, height: 50, width: 80)
-                    wc.showWindow(self)
+                    //_  = vc.configure(name: siggyApp.applicationName+" Terminal",
+                    //                  defaultStyle: TTYViewController.Style(interruptButtonTitle: "BREAK", forceUppercase: true),
+                    //                  styleSelection: 0, height: 50, width: 80)
                     if !(startLine(i,vc)) {
                         MSLog(level: .error, "\(name): Failed to start line \(i)")
                         wc.close()
                     }
+                    wc.showWindow(self)
                 }
             }
             a >>= 1
@@ -2121,12 +2142,18 @@ class COCDevice: CharacterDevice, TTYDelegate, COCCompletionDelegate {
         tty.delegateID = line
         
         let lx = hexOut(deviceAddress,width: 3)+":"+hexOut(line,width:2)
-        let style = machine.getIntegerSetting("TTY[\(lx)]S", 0)
         let h = max(10,machine.getIntegerSetting("TTY[\(lx)]H", 25))
         let w = max(15,machine.getIntegerSetting("TTY[\(lx)]W", 80))
-        _ = tty.configure(name: name+"-\(hexOut(line,width:2))",
-                         defaultStyle: TTYViewController.Style(interruptButtonTitle: "Break", forceUppercase: true),
-                          styleSelection: style, height: h, width: w)
+        let fontName = machine.getSetting("TTY[\(lx)]FN", "Courier")
+        let fontSize = machine.getDoubleSetting("TTY[\(lx)]FS", 12.0)
+        let fg = hexIn(hex: machine.getSetting("TTY[\(lx)]FG"), defaultValue: 0xFF000000)
+        let bg = hexIn(hex: machine.getSetting("TTY[\(lx)]BG"), defaultValue: 0xFFFFFFFF)
+       _ = tty.configure(name: name+"-\(hexOut(line,width:2))",
+                          font: NSFont(name: fontName, size: fontSize),
+                          foreground: NSColor(rgb32: fg),
+                          background: NSColor(rgb32: bg),
+                          height: max(h,10), width: max(w,60),
+                          options: [.interrupt, .isbreak, .capsLock])
 
         let px = machine.getDoubleSetting("TTY[\(lx)]X", 0)
         let py = machine.getDoubleSetting("TTY[\(lx)]Y", 0)
@@ -2214,15 +2241,18 @@ class COCDevice: CharacterDevice, TTYDelegate, COCCompletionDelegate {
         machine.set("TTY[\(lx)]Y", String(Double(origin.y)))
     }
 
-    func windowDidResize(_ id: Int, _ height: Int, _ width: Int) {
+    func windowDidResize(_ id: Int, width: Int, height: Int) {
         let lx = hexOut(deviceAddress,width: 3)+":"+hexOut(id,width:2)
         machine.set("TTY[\(lx)]H", String(height))
         machine.set("TTY[\(lx)]W", String(width))
     }
     
-    func styleDidChange(_ id: Int, _ styleNumber: Int) {
+    func fontDidChange(_ id: Int, fontName: String, fontSize: Double, fgColor: NSColor, bgColor: NSColor) {
         let lx = hexOut(deviceAddress,width: 3)+":"+hexOut(id,width:2)
-        machine.set("TTY[\(lx)]S", String(styleNumber))
+        machine.set("TTY[\(lx)]FN", fontName)
+        machine.set("TTY[\(lx)]FS", String(format:"%4.1f",fontSize))
+        machine.set("TTY[\(lx)]FG", String(format:"%08X",fgColor.rgb32))
+        machine.set("TTY[\(lx)]BG", String(format:"%08X",bgColor.rgb32))
     }
     
     func startPasteWindow(_ id: Int) {
@@ -2236,7 +2266,14 @@ class COCDevice: CharacterDevice, TTYDelegate, COCCompletionDelegate {
 
     @objc func clearLine(_ tty: TTYViewController?) {
         if let x = lineData.firstIndex(where: { (l) in return (l != nil) && (l!.tty == tty) } ) {
-            if (x >= 0) { lineData[x]!.tty = nil }
+            if (x >= 0) {
+                if let tty = lineData[x]!.tty {
+                    tty.textView.viewController = nil
+                    tty.windowController?.close()
+                    tty.windowController = nil
+                }
+                lineData[x]!.tty = nil
+            }
         }
     }
 
@@ -2358,6 +2395,8 @@ class BlockDevice: Device {
         }
     }
     var configuration: StorageConfiguration?
+    var mediaViewController: SiggyWindowController?
+    
     var isReadOnly: Bool { get {
         return (configuration != nil) && (configuration!.access == .read)
     }}
@@ -2368,30 +2407,29 @@ class BlockDevice: Device {
     
     var filePosition: Int { get { return (fileHandle != nil) ? Int(fileHandle.offsetInFile) : -1 }}
     
+    override func isReady() -> Bool {
+        return (dsbAutomatic) && (fileHandle != nil)
+    }
+
     func mediaFailure() {
         log(level: .warning, "MEDIA FAILURE @\(hexOut(filePosition))")
         dsbUnusualEnd = true
         dsbAutomatic = false
     }
 
+    func unload (_ force: Bool = false) {
+        if (force) {
+            log(level: .warning, "UNLOAD BY OPERATOR")
+            mediaFailure()
+            
+        }
+        super.unload()
+    }
 
     init(_ machine: VirtualMachine, name: String, iopNumber: UInt8, unitAddr: UInt8, type: Device.DType,_ model: Int, fullPath: String?, mountable: Bool, configuration: StorageConfiguration) {
         self.configuration = configuration
         super.init(machine, name: name, iopNumber: iopNumber, unitAddr: (unitAddr | 0x80), type: type, model: model, hostPath: fullPath, mountable: mountable, mode: configuration.access)
     }
-    
-    func forceUnload() {
-        log(level: .warning, "UNLOAD BY OPERATOR")
-        mediaFailure()
-        
-        if let fh = fileHandle {
-            do { try fh.close() }
-            catch { }
-            fileHandle = nil
-        }
-        hostPath = nil
-    }
-
 }
 
 // MARK: TAPEDEVICE
@@ -2458,18 +2496,17 @@ class TapeDevice: BlockDevice {
         }
     }
 
-    //TODO: Return an object, not a tupple.
-    override func mediaStatus() -> (Bool, UInt64, String, String) {
-        let (mounted, position, file, statusText) = super.mediaStatus()
-        if (mounted) {
-            var t = statusText
+    override func mediaStatus() -> MediaStatus {
+        var ms = super.mediaStatus()
+        if (ms.mounted) {
+            var t = ms.specifics
             if (atBOT) { t.addToCommaSeparatedList("BOT")}
             if (atBOF) { t.addToCommaSeparatedList("BOF")}
             if (atEOF) { t.addToCommaSeparatedList("EOF")}
             if (atEOT) { t.addToCommaSeparatedList("EOT")}
-            return (true, position, file, t)
+            ms.specifics = t
         }
-        return (false, position, file, statusText)
+        return ms
     }
     
     
@@ -2774,6 +2811,7 @@ class TapeDevice: BlockDevice {
         }
         else { atEOF = true; atEOT = true; mtlog("atEOT" ) }
     
+        if (kTapeIOTime > 0) { Thread.sleep(forTimeInterval: kTapeIOTime) }
         if ((order & 0x80) != 0) {
             dsbInterruptPending = true
         }
@@ -2781,8 +2819,8 @@ class TapeDevice: BlockDevice {
     }
     
     override func readBackward(_ cdw: IOCommand,_ order: UInt8,_ memory: RealMemory) {
-        // MARK: This appears never to be called.  Possibly SORT uses it.
-        if (atBOT) || (atBOF) {
+        // MARK: This is rarely used, but FILL uses it.
+        if (atBOT) || (atEOT) {
             dsbUnusualEnd = true
             asbChannelEnd = true
         }
@@ -2791,40 +2829,45 @@ class TapeDevice: BlockDevice {
             guard position (relative: -4) else { mediaFailure(); return }
             let previousBlockLength = readControlWord()!
             if (previousBlockLength <= 0) {
-                atBOF = true
+                //MARK: TAPE MARK
+                atEOF = true
                 dsbUnusualEnd = true
                 asbChannelEnd = true
+                // Move back in front of the tape mark.
+                guard position (relative: -4) else { mediaFailure(); return }
             }
-            
-            guard position (relative: -(previousBlockLength+8)) else { mediaFailure(); return }
-
-            // read forward from here, to get the block, then reposition
-            let finalPosition = Int(fileHandle.offsetInFile)
-            do {
-                let blockLength = readControlWord()!
-                if var buffer = try fileHandle.read(upToCount: min(blockLength,ioLength)) {
-                    if (buffer.count > ioLength) {
-                        log ("INCOMPLETE READ BACKWARDS")
-                        buffer = buffer.dropFirst(buffer.count - ioLength)
-                    }
-                    if !(cdw.fSkip) {
-                        memory.moveData(from: buffer, to: cdw.memoryAddress)
-                        if (trace) {
-                            log("MOVED TO MEMORY BA=\(hexOut(cdw.memoryAddress)), COUNT=X'\(hexOut(buffer.count))' OF X'\(hexOut(blockLength,width:0)) BYTES, FROM POSITION=\(hexOut(finalPosition))  BL=\(previousBlockLength),\(blockLength)")
+            else {
+                guard position (relative: -(previousBlockLength+8)) else { mediaFailure(); return }
+                
+                // read forward from here, to get the block, then reposition
+                let finalPosition = Int(fileHandle.offsetInFile)
+                do {
+                    let blockLength = readControlWord()!
+                    if var buffer = try fileHandle.read(upToCount: blockLength) {
+                        if (buffer.count > ioLength) {
+                            log ("INCOMPLETE BLOCK READ BACKWARDS")
+                            buffer = buffer.dropFirst(buffer.count - ioLength)
                         }
+                        if !(cdw.fSkip) {
+                            memory.moveData(from: buffer, to: cdw.memoryAddress - buffer.count + 1)
+                            if (trace) {
+                                log("MOVED TO MEMORY (BACKWARDS) BA=\(hexOut(cdw.memoryAddress)), COUNT=X'\(hexOut(buffer.count))' OF X'\(hexOut(blockLength,width:0)) BYTES, FROM POSITION=\(hexOut(finalPosition))  BL=\(previousBlockLength),\(blockLength)")
+                            }
+                        }
+                        ioLength -= buffer.count
                     }
-                    ioLength -= buffer.count
                 }
+                catch {
+                    log(error.localizedDescription)
+                    mediaFailure()
+                    return
+                }
+                guard position(to: finalPosition) else { mediaFailure(); return }
             }
-            catch {
-                log(error.localizedDescription)
-                mediaFailure()
-                return
-            }
-            guard position(to: finalPosition) else { mediaFailure(); return }
             mtlog("AFTER READ BACKWARDS")
         }
         
+        if (kTapeIOTime > 0) { Thread.sleep(forTimeInterval: kTapeIOTime) }
         if ((order & 0x80) != 0) {
             dsbInterruptPending = true
         }
@@ -2852,6 +2895,7 @@ class TapeDevice: BlockDevice {
             }
         }
 
+        if (kTapeIOTime > 0) { Thread.sleep(forTimeInterval: kTapeIOTime) }
         if ((order & 0x80) != 0) {
             dsbInterruptPending = true
         }
@@ -3099,7 +3143,6 @@ class TapeDevice: BlockDevice {
 // MARK: RANDOMACCESSDEVICE
 class RandomAccessDevice: BlockDevice {
     class StorageConfiguration : BlockDevice.StorageConfiguration {
-
         var cylinders: Int
         var heads: Int
         var sectorsPerTrack: Int
@@ -3118,7 +3161,7 @@ class RandomAccessDevice: BlockDevice {
         }
     }
 
-    var seekData = Data()
+    var seekData = Data(repeating: 0, count: 4)
     
     init(_ machine: VirtualMachine, name: String, iopNumber: UInt8, unitAddr: UInt8, type: Device.DType,_ model: Int, fullPath: String?, mountable: Bool, configuration: StorageConfiguration) {
         super.init (machine, name: name, iopNumber: iopNumber, unitAddr: unitAddr, type: type, model, fullPath: fullPath, mountable: mountable, configuration: configuration)
@@ -3133,45 +3176,52 @@ class RandomAccessDevice: BlockDevice {
             do {
                 let a = try FileManager.default.attributesOfItem(atPath: p)
                 if let size = a[.size] as? UInt64, (size >= minimumSize) {
-                    return super.load(path, mode: mode)
+                    if !super.load(path, mode: mode) {
+                        return false
+                    }
                 }
             }
             catch {
                 log(level: .error, "Device file verification THREW.")
                 dsbAutomatic = false
+                return false
             }
         }
-        
-        guard (mode == .update) else { return false }
-        
-        if !FileManager.default.fileExists(atPath: p) {
-            FileManager.default.createFile(atPath: p, contents: nil)
-        }
-        
-        if !super.load(path, mode: .update) {
-            return false
-        }
-        do {
-            let a = try FileManager.default.attributesOfItem(atPath: p)
-            if let size = a[.size] as? UInt64, (size < minimumSize) {
-                let eof = try fileHandle?.seekToEnd()
-                if var size = eof, (size < minimumSize) {
-                    // Past the end of the existing data.  Extend the file.
-                    if (MSLogManager.shared.logLevel >= .info) {
-                        log("EXTENDING \(name) TO  \(minimumSize) FROM \(size)")
-                    }
-                    let block = Data(repeating: 0xff, count: 0x400)
-                    while (size < minimumSize) {
-                        try fileHandle?.write(contentsOf: block)
-                        size += UInt64(block.count)
+        else {
+            guard (mode == .update) else { return false }
+            
+            if !FileManager.default.fileExists(atPath: p) {
+                FileManager.default.createFile(atPath: p, contents: nil)
+            }
+            
+            if !super.load(path, mode: .update) {
+                return false
+            }
+            do {
+                let a = try FileManager.default.attributesOfItem(atPath: p)
+                if let size = a[.size] as? UInt64, (size < minimumSize) {
+                    let eof = try fileHandle?.seekToEnd()
+                    if var size = eof, (size < minimumSize) {
+                        // Past the end of the existing data.  Extend the file.
+                        if (MSLogManager.shared.logLevel >= .info) {
+                            log("EXTENDING \(name) TO  \(minimumSize) FROM \(size)")
+                        }
+                        let block = Data(repeating: 0x00, count: 0x400)
+                        while (size < minimumSize) {
+                            try fileHandle?.write(contentsOf: block)
+                            size += UInt64(block.count)
+                        }
                     }
                 }
             }
+            catch {
+                log(level: .error, "Device file verification THREW.")
+                dsbAutomatic = false
+                return false
+            }
         }
-        catch {
-            log(level: .error, "Device file verification THREW.")
-            dsbAutomatic = false
-        }
+        
+        dsbAutomatic = true
         return true
     }
 
@@ -3182,7 +3232,7 @@ class RandomAccessDevice: BlockDevice {
         if (rs < 0) {
             var byteOffset: UInt64 = 0
             do {
-                try byteOffset = fileHandle!.offset()
+                try byteOffset = fileHandle?.offset() ?? 0
                 rs = Int(byteOffset / 1024)
             }
             catch {
@@ -3201,41 +3251,60 @@ class RandomAccessDevice: BlockDevice {
         return (0,0,0)
     }
     
-    override func mediaStatus() -> (Bool, UInt64, String, String) {
-        let (mounted, position, file, statusText) = super.mediaStatus()
-        if (mounted) {
-            var t = statusText + ((statusText != "") ? ", " : "")
-            let physicalSector = position/1024
+    override func mediaStatus() -> MediaStatus {
+        let ms = super.mediaStatus()
+        if (ms.mounted) {
+            var t = ms.specifics
+            let physicalSector = ms.position/1024
             let (c,h,s) = CHS()
-            t += "C=\(c), H=\(h), S=\(s) [Decimal]"
-            t += ", Physical Sector=\(physicalSector)/X'\(hexOut(physicalSector,width:0)) "
-            return (true, position, file, t)
+            t.addToCommaSeparatedList("C=\(hexOut(c,width:3)), H=\(hexOut(h,width:2)), S=\(hexOut(s,width:2)) [Hex]")
+            t.addToCommaSeparatedList("Physical Sector=\(physicalSector)/X'\(hexOut(physicalSector,width:0))' ")
+            return MediaStatus(mounted: true, position: ms.position, hostInfo: ms.hostInfo, specifics: t)
         }
-        return (false, position, file, statusText)
+        return ms
     }
     
-
-    
-    override func read(_ cdw: IOCommand,_ order: UInt8, _ memory: RealMemory) -> Bool {
-        // Both Read1 (0x12)  and Read2 (0x02) function identically for our purposes.
-        do { let buffer = try fileHandle?.read(upToCount: ioLength)
-            if (buffer != nil) {
-                var m = "MOVED"
-                if (cdw.fSkip) {
-                    m = "SKIPPED MOVE"
-                }
-                else {
-                    memory.moveData(from: buffer!, to: cdw.memoryAddress)
-                }
-                if (trace) {
-                    log(m + " TO MEMORY BA=\(hexOut(cdw.memoryAddress)), COUNT=X'\(hexOut(buffer!.count))' BYTES")
-                }
-                ioLength -= buffer!.count
-            }
+    //MARK: Override as necessary to intercept reads.
+    func doRead() -> Data? {
+        do {
+            let buffer = try fileHandle?.read(upToCount: ioLength)
+            return buffer
         }
         catch {
             log(level: .error, "FileHandle read operation THREW.")
             dsbAutomatic = false
+        }
+        return nil
+    }
+
+    //MARK: Override as necessary to intercept writes.
+    func doWrite (_ buffer: Data?) {
+        do {
+            try fileHandle?.write(contentsOf: buffer!)
+            ioLength -= buffer!.count
+        }
+        catch {
+            log(level: .error, "FileHandle write operation THREW.")
+            dsbAutomatic = false
+        }
+    }
+
+
+    override func read(_ cdw: IOCommand,_ order: UInt8, _ memory: RealMemory) -> Bool {
+        // Both Read1 (0x12)  and Read2 (0x02) function identically for our purposes.
+        let buffer = doRead()
+        if (buffer != nil) {
+            var m = "MOVED"
+            if (cdw.fSkip) {
+                m = "SKIPPED MOVE"
+            }
+            else {
+                memory.moveData(from: buffer!, to: cdw.memoryAddress)
+            }
+            if (trace) {
+                log(m + " TO MEMORY BA=\(hexOut(cdw.memoryAddress)), COUNT=X'\(hexOut(buffer!.count))' BYTES")
+            }
+            ioLength -= buffer!.count
         }
                 
         asbChannelEnd = true
@@ -3251,13 +3320,7 @@ class RandomAccessDevice: BlockDevice {
             log("READ MEMORY BA=\(hexOut(cdw.memoryAddress)), COUNT=X'\(hexOut(buffer.count))' BYTES")
         }
 
-        do { try fileHandle?.write(contentsOf: buffer)
-            ioLength -= buffer.count
-        }
-        catch {
-            log(level: .error, "FileHandle write operation THREW.")
-            dsbAutomatic = false
-        }
+        doWrite (buffer)
 
         asbChannelEnd = true
         if ((order & 0x80) != 0) {
@@ -3353,17 +3416,26 @@ class RandomAccessDevice: BlockDevice {
 //MARK: DPDEVICE
 //MARK: CYL, HEAD, SPT values are for 86MB model 7275.
 class DPDevice: RandomAccessDevice {
-    var OnSector: Bool = false
-    
+    var onSector: Bool = false
+    var granule0: Data?
+    var granule1: Data?
+
     init(_ machine: VirtualMachine, name: String, iopNumber: UInt8, unitAddr: UInt8, model: Int, fullPath: String?, mountable: Bool) {
         var chs: (Int, Int, Int) = (411, 19, 11)
         switch model {
-        case 7275:  chs = (411, 19, 11)
+        //case 0000:  chs = (65000, 200, 8)
+        case 7242: chs = (200, 20,  6)
+        case 7261: chs = (200, 20, 11)
+        case 7271: chs = (400, 20,  6)
+        case 7275: chs = (404, 19, 11)
+        case 3275: chs = (404, 19, 12)
+        case 9210: chs = (822, 28,  8)
         default: break
         }
         
         let configuration = RandomAccessDevice.StorageConfiguration(chs: chs, 0)
         super.init(machine, name: name, iopNumber: iopNumber, unitAddr: unitAddr, type: .dp, model, fullPath: fullPath, mountable: mountable, configuration: configuration)
+        isInit = true
     }
 
       
@@ -3371,7 +3443,7 @@ class DPDevice: RandomAccessDevice {
     // These happen to be the same.
     override func getTDVDetail() -> UInt8 {
         var status: UInt8 = 0
-        let (c, _, _) = CHS()
+        //let (c, _, _) = CHS()
         // bit 0: Overrun, nope
         // bit 1: Flaw, nope
         // bit 2: Programming error
@@ -3381,24 +3453,69 @@ class DPDevice: RandomAccessDevice {
     }
 
     override func getAIODetail()-> UInt8 {
-        if (OnSector) {
-            OnSector = false
+        if (onSector) {
+            onSector = false
             asbChannelEnd = false
             return 0x08
         }
         return 0
     }
     
-
-    
     
     override func load(_ path: String, mode: AccessMode) -> Bool {
-        loadAndCreateIfRequired(path, minimumSize: 0x4000)
+        if !loadAndCreateIfRequired(path, minimumSize: 0x4000) {
+            return false
+        }
+        
+        //MARK: If this is private mount, update the DEVICES table so that it persists.
+        //MARK: Also take an initial copy of the first granule which contains the VTOC.
+        if (isInit) {
+            machine.updateDeviceDB(deviceAddress, path: path)
+        }
+        
+        if (mountable) && (!path.isEmpty) {
+            do {
+                try fileHandle?.seek(toOffset: 0)
+                granule0 = try fileHandle?.read(upToCount: 0x800)
+                granule1 = try fileHandle?.read(upToCount: 0x800)
+            }
+            catch {
+                log(level: .error, "Cannot read granule 0/1")
+                dsbAutomatic = false
+            }
+        }
+        return true
     }
 
+    override func unload(_ force: Bool = false) {
+        super.unload(force)
+        
+        machine.updateDeviceDB(deviceAddress, path: "")
+        granule0 = nil
+        granule1 = nil
+    }
+        
+    //MARK: Intercept writes to granule 0 and 1
+    //MARK: Keep a copy for media detail window
+    override func doWrite (_ buffer: Data?) {
+        guard (buffer != nil) else { return }
+        if mountable, let fh = fileHandle {
+            do {
+                let address = try fh.offset()
+                if (address == 0) {
+                    granule0 = buffer
+                }
+                else if (address == 0x800) {
+                    granule1 = buffer
+                }
+            }
+            catch {}
+        }
+        super.doWrite(buffer)
+    }
 
     override func control(_ cdw: IOCommand,_ order: UInt8, _ memory: RealMemory) -> Bool {
-        OnSector = false
+        onSector = false
         if ((order == 0x07) || (order == 0x17)) {
             // Could be X'07' (reserve) or X'17' (release);
             // For a single CPU these are superfluous.
@@ -3407,7 +3524,7 @@ class DPDevice: RandomAccessDevice {
             // RESTORE CARRIAGE.
             do {
                 try fileHandle?.seek(toOffset: 0)
-                OnSector = true
+                onSector = true
             }
             catch {
                 log(level: .error, "FileHandle SEEK operation THREW.")
@@ -3429,7 +3546,7 @@ class DPDevice: RandomAccessDevice {
                 }
                 do {
                     try fileHandle?.seek(toOffset: byteOffset)
-                    OnSector = true
+                    onSector = true
                 }
                 catch {
                     log(level: .error, "FileHandle SEEK operation THREW.")
@@ -3437,7 +3554,7 @@ class DPDevice: RandomAccessDevice {
                 }
             }
             else {
-                if (trace) || (MSLogManager.shared.logLevel >= .debug) {
+                if (trace) || (MSLogManager.shared.logLevel >= .error) {
                     log("INVALID SEEK TO \(cylinder):\(head):\(sector)")
                 }
                 dsbUnusualEnd = true
@@ -3483,13 +3600,11 @@ class DPDevice: RandomAccessDevice {
             dsbInterruptPending = true
         }
     }
-    
-    
-
 }
 
 //MARK: DCDEVICE
 //MARK: BAND and SPB values are for a 5MB model 7212
+//TODO: CACHE ENTIRE RAD CONTENTS.
 class DCDevice: RandomAccessDevice {
     init(_ machine: VirtualMachine, name: String, iopNumber: UInt8, unitAddr: UInt8, model: Int, fullPath: String?) {
         var chs: (Int, Int, Int) = (1,64,82)

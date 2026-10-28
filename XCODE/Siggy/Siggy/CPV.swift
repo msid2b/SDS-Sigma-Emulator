@@ -6,6 +6,7 @@
 //
 //MARK: This file contains CP-V specific definitions and routines.
 
+
 //MARK: CAL tables for intruction display and logging.
 
 let cal11Table: [String] = [
@@ -192,53 +193,6 @@ struct MonitorReferences {
             
             a -= 1
         }
-        
-        //MARK: IF XDLT IS HERE, COPY ITS SYMBOLS.  OTHERWISE WE AR GOING TO HAVE TO READ THEM FROM DISC.
-        // This was useful when dubugging initialization and start up, before we could get to ANLZ.
-        // Now it is not really necessary, except possibly for the various report windows, which can do something similar
-        // individually as required.
-        /**
-        let xd1 = realMemory.loadUnsignedWord(word: 0xEA00)
-        if ((xd1 >> 24) == 0x68) {
-            let xdb = xd1 & 0x1FFFF
-            if (xdb > 0xEA03) && (xdb < 0xFFFF) {
-                // It is here, get the end of the symbol table
-                var xd2 = Int(realMemory.loadUnsignedWord(word: 0xEA02))
-                if (xd2 > 0xF000) && (xd2 < 0xFFFF) {
-                    var done = false
-                    while !done {
-                        xd2 -= 3
-                        let address = realMemory.loadUnsignedWord(word: xd2)
-                        var a = (xd2 + 1) << 2
-                        let b = realMemory.loadByte(a)
-                        if (b > 0) {
-                            let c = Character(Unicode.Scalar(asciiFromEbcdic(b)))
-                            var name = String(c)
-                            for _ in 0...6 {
-                                a += 1
-                                let b = realMemory.loadByte(a)
-                                if (b > 0x40) {
-                                    let c = Character(Unicode.Scalar(asciiFromEbcdic(b)))
-                                    name = name + String(c)
-                                }
-                            }
-                            symbols.setValue(address, forKey: name)
-                        }
-                        else { done = true }
-                    }
-                }
-            }
-        }
-        else {
-            //MARK: APPARENTLY NOT NECESSARY.
-            //MARK: GO Find "RACXI" on the swapper.  This will be in the middle of XDLT image.   We can grab the symbols values from there.
-        }
-        
-        //MARK: copy for faster access
-        if let a = symbols["DCT1"] as? Int {
-            dct1 = a
-        }
-        */
     }
 }
 
